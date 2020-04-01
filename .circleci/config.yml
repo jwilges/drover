@@ -1,0 +1,202 @@
+version: 2.1
+parameters:
+  python:
+    type: string
+    default: "3.8"
+
+jobs:
+  lint:
+    parameters:
+      python:
+        type: string
+    docker:
+      - image: circleci/python:<< parameters.python >>
+    working_directory: ~/build
+    steps:
+      - checkout
+      - initialize_environment:
+          session: dev-<< parameters.python >>
+      - run:
+          name: Run lint
+          command: |
+            nox -s dev-<< parameters.python >> -- lint
+      - save_environment:
+          session: dev-<< parameters.python >>
+  test:
+    parameters:
+      python:
+        type: string
+    docker:
+      - image: circleci/python:<< parameters.python >>
+    working_directory: ~/build
+    steps:
+      - checkout
+      - initialize_environment:
+          session: dev-<< parameters.python >>
+      - run:
+          name: Run tests
+          command: nox -s dev-<< parameters.python >> -- coverage --junitxml="test-reports/junit.xml"
+      - store_test_results:
+          path: test-reports
+      - store_artifacts:
+          path: test-reports
+          destination: test-reports
+      - run:
+          name: Upload code coverage report to CodeCov
+          command: |
+            codecov
+      - save_environment:
+          session: dev-<< parameters.python >>
+  package:
+    parameters:
+      python:
+        type: string
+    docker:
+      - image: circleci/python:<< parameters.python >>
+    working_directory: ~/build
+    steps:
+      - checkout
+      - run:
+          name: Validate version tag "<< pipeline.git.tag >>"
+          command: python setup.py validate_tag
+      - run:
+          name: Install CI dependencies
+          command: pip install wheel
+      - run:
+          name: Build Python package
+          command: python setup.py sdist bdist_wheel
+      - store_artifacts:
+          path: dist
+      - persist_to_workspace:
+          root: .
+          paths:
+            - dist
+  release-github:
+    docker:
+      - image: circleci/golang:1.13
+    working_directory: ~/build
+    steps:
+      - attach_workspace:
+          at: ~/build
+      - deploy:
+          name: Create GitHub release
+          command: |
+            go get github.com/itchio/gothub
+            gothub release \
+              --user "${CIRCLE_PROJECT_USERNAME}" \
+              --repo "${CIRCLE_PROJECT_REPONAME}" \
+              --tag "${CIRCLE_TAG}" \
+              --target "${CIRCLE_SHA1}" \
+              --name "${CIRCLE_TAG}" \
+              --description "# ${CIRCLE_TAG} Release Notes" \
+              --draft
+            cd dist
+            for file in *; do
+              if [ -f "$file" ]; then
+                gothub upload \
+                  --user "${CIRCLE_PROJECT_USERNAME}" \
+                  --repo "${CIRCLE_PROJECT_REPONAME}" \
+                  --tag "${CIRCLE_TAG}" \
+                  --name "$file" \
+                  --file "$file"
+              fi
+            done
+  release-pypi:
+    parameters:
+      python:
+        type: string
+    docker:
+      - image: circleci/python:<< parameters.python >>
+    working_directory: ~/build
+    environment:
+      TWINE_USERNAME: __token__
+    steps:
+      - attach_workspace:
+          at: ~/build
+      - run:
+          name: Install CI dependencies
+          command: pip install twine
+      - deploy:
+          name: Upload PyPI package
+          command: |
+            export TWINE_PASSWORD="${PYPI_TOKEN}"
+            python3 -m twine upload dist/*
+
+workflows:
+  version: 2
+  ci:
+    jobs:
+      - lint:
+          python: << pipeline.parameters.python >>
+      - test:
+          python: << matrix.python >>
+          matrix:
+            parameters:
+              python: ["3.7", << pipeline.parameters.python >>]
+      - package:
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v.*/
+          python: << pipeline.parameters.python >>
+      - release-github:
+          requires:
+            - package
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v.*/
+      - release-pypi:
+          requires:
+            - package
+            - release-github
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v.*/
+          python: << pipeline.parameters.python >>
+
+commands:
+  initialize_environment:
+    description: "Initialize CI dependencies and project dependencies from cache"
+    parameters:
+      session:
+        type: string
+    steps:
+      - run:
+          name: Set CI environment variables
+          command: |
+            echo 'export PATH="~/.local/bin:$PATH"' >> $BASH_ENV
+      - restore_cache:
+          name: Restore CI dependencies from cache
+          keys:
+            - pip-ci-{{ .Branch }}-v0
+      - run:
+          name: Install CI dependencies
+          command: |
+            pip install --user nox>=2019.11.9 codecov~=2.0.22
+      - restore_cache:
+          name: Restore project dependencies from cache
+          paths:
+            - ".nox"
+          keys:
+            - pip-<< parameters.session >>-{{ .Branch }}-{{ checksum "setup.py" }}-v0
+  save_environment:
+    description: "Save CI dependencies and project dependencies to cache"
+    parameters:
+      session:
+        type: string
+    steps:
+      - save_cache:
+          name: Save CI dependencies to cache
+          paths:
+            - "~/.local/bin"
+          key: pip-ci-{{ .Branch }}-v0
+      - save_cache:
+          name: Save project dependencies to cache
+          paths:
+            - ".nox"
+          key: pip-<< parameters.session >>-{{ .Branch }}-{{ checksum "setup.py" }}-v0

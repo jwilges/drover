@@ -8,7 +8,6 @@ import shutil
 import sys
 import tempfile
 import zipfile
-from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, Iterable, List, Mapping, Optional, Pattern, Sequence
@@ -19,63 +18,11 @@ import tqdm
 import yaml
 from pydantic import BaseModel, ValidationError
 
+from drover.io import ArchiveMapping, format_file_size, get_relative_file_names, write_archive
+from drover.models import S3BucketFileVersion, S3BucketPath, Settings, Stage
 
-__version__ = '0.7.0'
+__version__ = '0.7.1.dev1'
 _logger = logging.getLogger(__name__)
-
-
-class S3BucketPath(BaseModel):
-    region_name: str
-    bucket_name: str
-    prefix: str = ''
-
-
-class S3BucketFileVersion(BaseModel):
-    bucket_name: str
-    key: str
-    version_id: Optional[str]
-
-
-class Stage(BaseModel):
-    region_name: str
-    function_name: str
-    compatible_runtime: str
-    function_file_patterns: Sequence[Pattern]
-    function_extra_paths: Sequence[Path] = []
-    package_exclude_patterns: Sequence[Pattern] = [re.compile(r'.*__pycache__.*')]
-    upload_bucket: Optional[S3BucketPath]
-
-
-class Settings(BaseModel):
-    stages: Mapping[str, Stage]
-
-
-@dataclass
-class ArchiveMapping:
-    source_file_name: Path
-    archive_file_name: Path
-
-
-def format_file_size(size_in_bytes: float):
-    for unit in ('B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB'):
-        if abs(size_in_bytes) < 1024.0:
-            return f'{size_in_bytes:.2f} {unit}'
-        size_in_bytes /= 1024.0
-    return f'{size_in_bytes:.2f} YiB'
-
-
-def get_relative_file_names(source_path: Path, exclude_patterns: Sequence[Pattern]) -> Iterable[Path]:
-    for root, _directory_names, file_names in os.walk(source_path):
-        for file_name in file_names:
-            relative_file_name = Path(os.path.join(root, file_name)).relative_to(source_path)
-            if not any([pattern.match(str(relative_file_name)) for pattern in exclude_patterns]):
-                yield relative_file_name
-
-
-def write_archive(archive_file_name: Path, archive_mappings: Iterable[ArchiveMapping]):
-    with zipfile.ZipFile(archive_file_name, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-        for mapping in archive_mappings:
-            archive.write(filename=mapping.source_file_name, arcname=mapping.archive_file_name)
 
 
 class UpdateError(RuntimeError):
@@ -83,6 +30,8 @@ class UpdateError(RuntimeError):
 
 
 class Drover:
+    """An interface to efficiently publish and update a Lambda function and requirements layer
+    representation of a Python package directory"""
     def __init__(self, settings: Settings, stage: str, interactive: bool = False):
         self.settings = settings
         self.stage = settings.stages[stage]
@@ -93,7 +42,11 @@ class Drover:
 
         self.lambda_client = boto3.client('lambda', region_name=self.stage.region_name)
 
-    def update(self, install_path: Path):
+    def update(self, install_path: Path) -> None:
+        """Publish and/or update a Lambda function and/or requirements layer representation of a Python package directory
+
+        Args:
+            install_path: a Python package directory (e.g. via `pip install -t <install_path>`)"""
         package_record_pattern = re.compile(r'\.dist-info/RECORD$')
         def package_record_digest(file_name: Path) -> bytes:
             if package_record_pattern.search(str(file_name)):
@@ -180,7 +133,7 @@ class Drover:
             head_requirements_layer_arn_missing,
             head_requirements_digest != requirements_digest))
         if should_upload_requirements:
-            requirements_layer_arn = self.upload_requirements_archive(requirements_mappings, requirements_digest)
+            requirements_layer_arn = self._upload_requirements_archive(requirements_mappings, requirements_digest)
             function_tags['HeadRequirementsDigest'] = requirements_digest
             function_tags['HeadRequirementsLayerArn'] = requirements_layer_arn
         else:
@@ -200,7 +153,7 @@ class Drover:
                 raise UpdateError(f'Failed to set requirements layer for {self.stage.function_name}: {e}')
 
         if not head_function_digest or head_function_digest != function_digest:
-            self.upload_function_archive(function_mappings, function_digest)
+            self._upload_function_archive(function_mappings)
             function_tags['HeadFunctionDigest'] = function_digest
         else:
             _logger.info('Skipping function upload')
@@ -210,7 +163,7 @@ class Drover:
         except (botocore.exceptions.BotoCoreError, botocore.exceptions.ClientError) as e:
             raise UpdateError(f'Unable to update tags for Lambda function "{self.stage.function_name}": {e}')
 
-    def upload_file_to_bucket(self, file_name: Path, file_size: float, description: str) -> S3BucketFileVersion:
+    def _upload_file_to_bucket(self, file_name: Path, file_size: float, description: str) -> S3BucketFileVersion:
         upload_bucket: S3BucketPath = self.stage.upload_bucket
         s3_client = boto3.client('s3', region_name=upload_bucket.region_name)
 
@@ -235,7 +188,7 @@ class Drover:
             key=key,
             version_id=response.get('VersionId'))
 
-    def delete_file_from_bucket(self, bucket_file: S3BucketFileVersion):
+    def _delete_file_from_bucket(self, bucket_file: S3BucketFileVersion):
         upload_bucket = self.stage.upload_bucket
         s3_client = boto3.client('s3', region_name=upload_bucket.region_name)
         arguments = {
@@ -246,7 +199,7 @@ class Drover:
             arguments['VersionId'] = bucket_file.version_id
         s3_client.delete_object(**arguments)
 
-    def upload_requirements_archive(self, archive_mappings: Sequence[ArchiveMapping], archive_digest: str) -> str:
+    def _upload_requirements_archive(self, archive_mappings: Sequence[ArchiveMapping], archive_digest: str) -> str:
         archive_handle, archive_file_name = tempfile.mkstemp(suffix='.zip', prefix='_requirements-')
         archive_file_name = Path(archive_file_name)
 
@@ -259,7 +212,8 @@ class Drover:
 
             if self.stage.upload_bucket:
                 try:
-                    bucket_file = self.upload_file_to_bucket(archive_file_name, archive_size, description='Upload requirements layer')
+                    bucket_file = self._upload_file_to_bucket(archive_file_name, archive_size,
+                                                              description='Upload requirements layer')
                     file_arguments = {
                         'S3Bucket': bucket_file.bucket_name,
                         'S3Key': bucket_file.key,
@@ -267,7 +221,8 @@ class Drover:
                     if bucket_file.version_id:
                         file_arguments['S3ObjectVersion'] = bucket_file.version_id
                 except botocore.exceptions.BotoCoreError as e:
-                    _logger.error('Failed to upload requirements archive to bucket; falling back to direct file upload.', exc_info=e)
+                    _logger.error('Failed to upload requirements archive to bucket; falling back to direct file upload.',
+                                  exc_info=e)
                     bucket_file = None
 
             if not bucket_file:
@@ -285,7 +240,7 @@ class Drover:
                 raise UpdateError(f'Failed to publish requirements layer for {self.stage.function_name}: {e}')
             finally:
                 if bucket_file:
-                    self.delete_file_from_bucket(bucket_file)
+                    self._delete_file_from_bucket(bucket_file)
 
             layer_version_arn = response['LayerVersionArn']
             layer_size_text = format_file_size(float(response['Content']['CodeSize']))
@@ -299,7 +254,7 @@ class Drover:
         finally:
             archive_file_name.unlink()
 
-    def upload_function_archive(self, archive_mappings: Sequence[ArchiveMapping], archive_digest: str) -> str:
+    def _upload_function_archive(self, archive_mappings: Sequence[ArchiveMapping]) -> str:
         archive_handle, archive_file_name = tempfile.mkstemp(suffix='.zip', prefix='_function-')
         archive_file_name = Path(archive_file_name)
 
@@ -312,7 +267,8 @@ class Drover:
 
             if self.stage.upload_bucket:
                 try:
-                    bucket_file = self.upload_file_to_bucket(archive_file_name, archive_size, description='Upload function')
+                    bucket_file = self._upload_file_to_bucket(archive_file_name, archive_size,
+                                                              description='Upload function')
                     file_arguments = {
                         'S3Bucket': bucket_file.bucket_name,
                         'S3Key': bucket_file.key,
@@ -320,7 +276,8 @@ class Drover:
                     if bucket_file.version_id:
                         file_arguments['S3ObjectVersion'] = bucket_file.version_id
                 except botocore.exceptions.BotoCoreError as e:
-                    _logger.error('Failed to upload function archive to bucket; falling back to direct file upload.', exc_info=e)
+                    _logger.error('Failed to upload function archive to bucket; falling back to direct file upload.',
+                                  exc_info=e)
                     bucket_file = None
 
             if not bucket_file:
@@ -337,7 +294,7 @@ class Drover:
                 raise RuntimeError(f'Failed to update function code for {self.stage.function_name}: {e}')
             finally:
                 if bucket_file:
-                    self.delete_file_from_bucket(bucket_file)
+                    self._delete_file_from_bucket(bucket_file)
 
             function_arn = response['FunctionArn']
             function_size_text = format_file_size(float(response['CodeSize']))
@@ -360,6 +317,7 @@ class Drover:
 
 
 def main():
+    """The main command-line entry point for the Drover interface"""
     logging.basicConfig(format='%(message)s')
     _logger.setLevel(logging.INFO)
 
