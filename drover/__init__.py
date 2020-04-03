@@ -21,8 +21,12 @@ from pydantic import BaseModel, ValidationError
 from drover.io import ArchiveMapping, format_file_size, get_digest, get_relative_file_names, write_archive
 from drover.models import S3BucketFileVersion, S3BucketPath, Settings, Stage
 
-__version__ = '0.7.1.dev1'
+__version__ = '0.7.1.dev2'
 _logger = logging.getLogger(__name__)
+
+
+class SettingsError(RuntimeError):
+    """Base settings error"""
 
 
 class UpdateError(RuntimeError):
@@ -34,8 +38,12 @@ class Drover:
     representation of a Python package directory"""
     def __init__(self, settings: Settings, stage: str, interactive: bool = False):
         self.settings = settings
-        self.stage = settings.stages[stage]
         self.interactive = interactive
+
+        if stage not in self.settings.stages:
+            raise SettingsError(f'Invalid stage name: {stage}')
+
+        self.stage = self.settings.stages[stage]
 
         self.requirements_layer_name = f'{self.stage.function_name}-requirements'
         self.compatible_runtime_library_path = Drover._get_runtime_library_path(self.stage.compatible_runtime)
@@ -47,11 +55,15 @@ class Drover:
 
         Args:
             install_path: a Python package directory (e.g. via `pip install -t <install_path>`)"""
+
+        if not install_path.is_dir():
+            raise UpdateError(f'Install path is invalid: {install_path}')
+
         requirements_base_path = self.compatible_runtime_library_path
         function_file_patterns = self.stage.function_file_patterns
 
-        requirements_mappings: Sequence[ArchiveMapping] = []
-        function_mappings: Sequence[ArchiveMapping] = []
+        requirements_mappings: List[ArchiveMapping] = []
+        function_mappings: List[ArchiveMapping] = []
         for relative_file_name in get_relative_file_names(install_path, self.stage.package_exclude_patterns):
             source_file_name = install_path / relative_file_name
             if any([pattern.match(str(relative_file_name)) for pattern in function_file_patterns]):
@@ -107,8 +119,8 @@ class Drover:
                 self.lambda_client.get_layer_version_by_arn(Arn=head_requirements_layer_arn)
                 head_requirements_layer_arn_missing = False
             except (botocore.exceptions.BotoCoreError, botocore.exceptions.ClientError) as e:
-                _logger.warning('Unable to retrieve requirements layer "%s"; forcing re-upload. Error: %s',
-                                head_requirements_layer_arn, e)
+                _logger.warning('Unable to retrieve requirements layer "%s"; forcing re-upload.', head_requirements_layer_arn)
+                _logger.debug('', exc_info=e)
 
         should_upload_requirements = any((
             not head_requirements_digest,
@@ -124,16 +136,17 @@ class Drover:
             _logger.info('Skipping requirements upload')
 
         if function_runtime != self.stage.compatible_runtime or requirements_layer_arn not in function_layer_arns:
+            _logger.info('Updating function resource...')
+            function_layer_arns = [requirements_layer_arn]
             try:
-                function_layer_arns = [requirements_layer_arn]
                 self.lambda_client.update_function_configuration(
                     FunctionName=self.stage.function_name,
                     Runtime=self.stage.compatible_runtime,
                     Layers=function_layer_arns)
-                _logger.info('Updated function runtime ("%s") and layers: %s',
-                             self.stage.compatible_runtime, function_layer_arns)
             except botocore.exceptions.BotoCoreError as e:
-                raise UpdateError(f'Failed to set requirements layer for {self.stage.function_name}: {e}')
+                raise UpdateError(f'Failed to update function "{self.stage.function_name}" runtime and layers: {e}')
+            _logger.info('Updated function "%s" resource; runtime: "%s"; layers: %s',
+                         self.stage.function_name, self.stage.compatible_runtime, function_layer_arns)
 
         if not head_function_digest or head_function_digest != function_digest:
             self._upload_function_archive(function_mappings)
@@ -146,20 +159,19 @@ class Drover:
         except (botocore.exceptions.BotoCoreError, botocore.exceptions.ClientError) as e:
             raise UpdateError(f'Unable to update tags for Lambda function "{self.stage.function_name}": {e}')
 
-    def _upload_file_to_bucket(self, file_name: Path, file_size: float, description: str) -> S3BucketFileVersion:
+    def _upload_file_to_bucket(self, file_name: Path, file_size: float) -> S3BucketFileVersion:
         upload_bucket: S3BucketPath = self.stage.upload_bucket
         s3_client = boto3.client('s3', region_name=upload_bucket.region_name)
 
-        progress = tqdm.tqdm(desc=description, leave=False, total=file_size, unit='B', unit_scale=True,
-                             disable=not self.interactive)
-        callback = progress.update
-
         key = f'{upload_bucket.prefix}{file_name.name}'
-        s3_client.upload_file(
-            Filename=str(file_name),
-            Bucket=upload_bucket.bucket_name,
-            Key=key,
-            Callback=callback)
+        with tqdm.tqdm(total=file_size, unit='B', unit_divisor=1024, unit_scale=True, leave=True,
+                       disable=not self.interactive) as progress:
+            s3_client.upload_file(
+                Filename=str(file_name),
+                Bucket=upload_bucket.bucket_name,
+                Key=key,
+                Callback=progress.update)
+
         response = s3_client.head_object(
             Bucket=upload_bucket.bucket_name,
             Key=key
@@ -192,9 +204,9 @@ class Drover:
             archive_size = float(archive_file_name.stat().st_size)
 
             if self.stage.upload_bucket:
+                _logger.info('Uploading requirements layer archive...')
                 try:
-                    bucket_file = self._upload_file_to_bucket(archive_file_name, archive_size,
-                                                              description='Upload requirements layer')
+                    bucket_file = self._upload_file_to_bucket(archive_file_name, archive_size)
                     file_arguments = {
                         'S3Bucket': bucket_file.bucket_name,
                         'S3Key': bucket_file.key,
@@ -202,8 +214,8 @@ class Drover:
                     if bucket_file.version_id:
                         file_arguments['S3ObjectVersion'] = bucket_file.version_id
                 except botocore.exceptions.BotoCoreError as e:
-                    _logger.error('Failed to upload requirements archive to bucket; falling back to direct file upload.',
-                                  exc_info=e)
+                    _logger.error('Failed to upload requirements archive to bucket; falling back to direct file upload.')
+                    _logger.debug('', exc_info=e)
                     bucket_file = None
 
             if not bucket_file:
@@ -211,6 +223,7 @@ class Drover:
                     file_arguments = {'ZipFile': archive_file.read()}
 
             archive_description = f'Requirements layer for {self.stage.function_name}; digest: {archive_digest}'
+            _logger.info('Publishing requirements layer...')
             try:
                 response = self.lambda_client.publish_layer_version(
                     LayerName=self.requirements_layer_name,
@@ -247,9 +260,9 @@ class Drover:
             archive_size = float(archive_file_name.stat().st_size)
 
             if self.stage.upload_bucket:
+                _logger.info('Uploading function archive...')
                 try:
-                    bucket_file = self._upload_file_to_bucket(archive_file_name, archive_size,
-                                                              description='Upload function')
+                    bucket_file = self._upload_file_to_bucket(archive_file_name, archive_size)
                     file_arguments = {
                         'S3Bucket': bucket_file.bucket_name,
                         'S3Key': bucket_file.key,
@@ -257,14 +270,15 @@ class Drover:
                     if bucket_file.version_id:
                         file_arguments['S3ObjectVersion'] = bucket_file.version_id
                 except botocore.exceptions.BotoCoreError as e:
-                    _logger.error('Failed to upload function archive to bucket; falling back to direct file upload.',
-                                  exc_info=e)
+                    _logger.error('Failed to upload function archive to bucket; falling back to direct file upload.')
+                    _logger.debug('', exc_info=e)
                     bucket_file = None
 
             if not bucket_file:
                 with open(archive_file_name, 'rb') as archive_file:
                     file_arguments = {'ZipFile': archive_file.read()}
 
+            _logger.info('Updating function resource...')
             try:
                 response = self.lambda_client.update_function_code(
                     FunctionName=self.stage.function_name,
@@ -279,7 +293,7 @@ class Drover:
 
             function_arn = response['FunctionArn']
             function_size_text = format_file_size(float(response['CodeSize']))
-            _logger.info('Updated function "%s"; size: %s; ARN: %s',
+            _logger.info('Updated function "%s" resource; size: %s; ARN: %s',
                          self.stage.function_name, function_size_text, function_arn)
 
             return function_arn
@@ -299,15 +313,15 @@ class Drover:
 
 def main():
     """The main command-line entry point for the Drover interface"""
-
     parser = argparse.ArgumentParser(description=__doc__.partition('\n')[0])
     parser.add_argument('--version', '-V', action='version', version=f'%(prog)s {__version__}')
     group = parser.add_mutually_exclusive_group()
-    group.add_argument('--interactive', action='store_true', help='enable interactive output (i.e. for a PTY)')
-    group.add_argument('--non-interactive', action='store_true', help='disable interactive output (i.e. for a PTY)')
-    group = parser.add_mutually_exclusive_group()
     group.add_argument('--verbose', '-v', action='count', default=0, help='increase output verbosity')
     group.add_argument('--quiet', action='store_true', help='disable output')
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--interactive', action='store_true', help='enable interactive output (i.e. for a PTY)')
+    group.add_argument('--non-interactive', action='store_true', help='disable interactive output')
+
     parser.add_argument('--settings-file', default=Path('drover.yml'), type=Path,
                         help='Settings file name (default: "drover.yml")')
     parser.add_argument('--install-path', default=Path(), type=Path,
@@ -316,8 +330,8 @@ def main():
     arguments = parser.parse_args()
 
     if not arguments.quiet:
-        logging.basicConfig(format='%(message)s')
-        logging_level = logging.INFO - (10 * arguments.verbose)
+        logging.basicConfig(format='%(message)s', stream=sys.stdout)
+        logging_level = max(1, logging.INFO - (10 * arguments.verbose))
         _logger.setLevel(logging_level)
 
     interactive = True if arguments.interactive else False if arguments.non_interactive else sys.__stdin__.isatty()
@@ -331,10 +345,21 @@ def main():
             settings = Settings.parse_obj(yaml.safe_load(settings_file))
     except (ValueError, ValidationError) as e:
         _logger.error('Settings file is invalid: %s', e)
+        _logger.debug('', exc_info=e)
         sys.exit(1)
     except FileNotFoundError as e:
         _logger.error('Settings file does not exist: %s', e)
+        _logger.debug('', exc_info=e)
         sys.exit(1)
 
-    drover = Drover(settings, arguments.stage, interactive=interactive)
-    drover.update(install_path)
+    try:
+        drover = Drover(settings, arguments.stage, interactive=interactive)
+        drover.update(install_path)
+    except SettingsError as e:
+        _logger.error('Initialization failed: %s', e)
+        _logger.debug('', exc_info=e)
+        sys.exit(1)
+    except UpdateError as e:
+        _logger.error('Update failed: %s', e)
+        _logger.debug('', exc_info=e)
+        sys.exit(1)
