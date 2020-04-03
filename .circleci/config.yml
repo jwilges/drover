@@ -18,10 +18,7 @@ jobs:
           session: dev-<< parameters.python >>
       - run:
           name: Run lint
-          command: |
-            nox -s dev-<< parameters.python >> -- lint
-      - save_environment:
-          session: dev-<< parameters.python >>
+          command: invoke lint
   test:
     parameters:
       python:
@@ -35,7 +32,7 @@ jobs:
           session: dev-<< parameters.python >>
       - run:
           name: Run tests
-          command: nox -s dev-<< parameters.python >> -- coverage --junitxml="test-reports/junit.xml"
+          command: invoke coverage -- --junitxml="test-reports/junit.xml"
       - store_test_results:
           path: test-reports
       - store_artifacts:
@@ -45,8 +42,6 @@ jobs:
           name: Upload code coverage report to CodeCov
           command: |
             codecov
-      - save_environment:
-          session: dev-<< parameters.python >>
   package:
     parameters:
       python:
@@ -177,26 +172,22 @@ commands:
       - run:
           name: Install CI dependencies
           command: |
-            pip install --user nox>=2019.11.9 codecov~=2.0.22
-      - restore_cache:
-          name: Restore project dependencies from cache
-          paths:
-            - ".nox"
-          keys:
-            - pip-<< parameters.session >>-{{ .Branch }}-{{ checksum "setup.py" }}-v0
-  save_environment:
-    description: "Save CI dependencies and project dependencies to cache"
-    parameters:
-      session:
-        type: string
-    steps:
+            pip install --cache-dir /tmp/pip --user -r requirements.dev.txt codecov~=2.0.22
       - save_cache:
           name: Save CI dependencies to cache
           paths:
             - "~/.local/bin"
           key: pip-ci-{{ .Branch }}-v0
+      - restore_cache:
+          name: Restore project dependencies from cache
+          keys:
+            - pip-<< parameters.session >>-{{ .Branch }}-{{ checksum "requirements.txt" }}-v0
+      - run:
+          name: Install project dependencies
+          command: |
+            pip install --cache-dir /tmp/pip --user -r requirements.txt .
       - save_cache:
           name: Save project dependencies to cache
           paths:
-            - ".nox"
-          key: pip-<< parameters.session >>-{{ .Branch }}-{{ checksum "setup.py" }}-v0
+            - /tmp/pip
+          key: pip-<< parameters.session >>-{{ .Branch }}-{{ checksum "requirements.txt" }}-v0

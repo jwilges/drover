@@ -1,0 +1,5 @@
+-c requirements.txt
+coverage
+invoke
+pylint
+pytest

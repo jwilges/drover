@@ -1,6 +1,9 @@
 # drover
 *drover: a command-line utility to deploy Python packages to Lambda functions*
 
+[![circleci](https://circleci.com/gh/jwilges/drover/tree/master.svg?style=shield)](https://circleci.com/gh/jwilges/drover/tree/master)
+[![codecov](https://codecov.io/gh/jwilges/drover/branch/master/graph/badge.svg)](https://codecov.io/gh/jwilges/drover/branch/master)
+
 ## Supported Platforms
 This utility has been tested on macOS Catalina 10.15.
 
