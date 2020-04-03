@@ -1,4 +1,6 @@
 """Generic functionality related to files and I/O"""
+import hashlib
+import re
 import os
 import zipfile
 from dataclasses import dataclass
@@ -31,6 +33,35 @@ def format_file_size(size_in_bytes: float) -> str:
             return f'{size_in_bytes:.2f} {unit}'
         size_in_bytes /= 1024.0
     return f'{size_in_bytes:.2f} YiB'
+
+
+def get_digest(source_file_names: Sequence[Path], block_size: int = 8192) -> str:
+    """Return a SHA256 hash composed from the content of all source files.
+
+    Args:
+        source_file_names: A sequence of source file paths
+
+    Returns: A SHA256 hash composed from the content of all source files."""
+    package_record_pattern = re.compile(r'\.dist-info/RECORD$')
+    digest = hashlib.sha256()
+    full = set(source_file_names)
+    done = set()
+    for source_file_name in sorted(full):
+        if package_record_pattern.search(str(source_file_name)):
+            package_parent_path = source_file_name.parent.parent
+            with open(source_file_name, 'r') as record:
+                for item in record:
+                    item_name, item_hash, _other = item.rsplit(',', maxsplit=3)
+                    item_name = package_parent_path / item_name
+                    if item_hash and item_name in full:
+                        digest.update(item_hash.encode())
+                        done.add(item_name)
+    remaining = sorted(full - done)
+    for source_file_name in remaining:
+        with open(source_file_name, 'rb') as source_file:
+            while source_data := source_file.read(block_size):
+                digest.update(source_data)
+    return digest.hexdigest()
 
 
 def get_relative_file_names(source_path: Path, exclude_patterns: Sequence[Pattern] = None) -> Iterable[Path]:

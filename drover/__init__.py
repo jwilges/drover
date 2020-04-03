@@ -1,6 +1,5 @@
 """drover: a command-line utility to deploy Python packages to Lambda functions"""
 import argparse
-import hashlib
 import logging
 import os
 import re
@@ -9,6 +8,7 @@ import sys
 import tempfile
 import zipfile
 from http import HTTPStatus
+from io import StringIO
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, Iterable, List, Mapping, Optional, Pattern, Sequence
 
@@ -18,7 +18,7 @@ import tqdm
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from drover.io import ArchiveMapping, format_file_size, get_relative_file_names, write_archive
+from drover.io import ArchiveMapping, format_file_size, get_digest, get_relative_file_names, write_archive
 from drover.models import S3BucketFileVersion, S3BucketPath, Settings, Stage
 
 __version__ = '0.7.1.dev1'
@@ -47,60 +47,43 @@ class Drover:
 
         Args:
             install_path: a Python package directory (e.g. via `pip install -t <install_path>`)"""
-        package_record_pattern = re.compile(r'\.dist-info/RECORD$')
-        def package_record_digest(file_name: Path) -> bytes:
-            if package_record_pattern.search(str(file_name)):
-                with open(file_name, 'rb') as package_record:
-                    return hashlib.sha1(package_record.read()).digest()
-            return None
-
-        def extra_file_digest(file_name: Path) -> bytes:
-            file_stat = file_name.stat()
-            return hashlib.sha1(f'{str(file_name)}{file_stat.st_size}{file_stat.st_mtime}'.encode()).digest()
-
         requirements_base_path = self.compatible_runtime_library_path
         function_file_patterns = self.stage.function_file_patterns
 
-        requirements_digest = hashlib.sha1()
         requirements_mappings: Sequence[ArchiveMapping] = []
-        function_digest = hashlib.sha1()
         function_mappings: Sequence[ArchiveMapping] = []
-        for relative_file_name in sorted(get_relative_file_names(install_path, self.stage.package_exclude_patterns)):
+        for relative_file_name in get_relative_file_names(install_path, self.stage.package_exclude_patterns):
             source_file_name = install_path / relative_file_name
-            source_file_digest = package_record_digest(source_file_name)
             if any([pattern.match(str(relative_file_name)) for pattern in function_file_patterns]):
-                if source_file_digest:
-                    function_digest.update(source_file_digest)
                 function_mappings.append(
                     ArchiveMapping(
                         source_file_name=source_file_name,
                         archive_file_name=relative_file_name))
             else:
-                if source_file_digest:
-                    function_digest.update(source_file_digest)
                 requirements_mappings.append(
                     ArchiveMapping(
                         source_file_name=source_file_name,
                         archive_file_name=requirements_base_path / relative_file_name))
-        for extra_path in sorted(self.stage.function_extra_paths):
-            for relative_file_name in sorted(get_relative_file_names(extra_path, self.stage.package_exclude_patterns)):
+        for extra_path in self.stage.function_extra_paths:
+            for relative_file_name in get_relative_file_names(extra_path, self.stage.package_exclude_patterns):
                 source_file_name = extra_path / relative_file_name
-                source_file_digest = extra_file_digest(source_file_name)
-                if source_file_digest:
-                    function_digest.update(source_file_digest)
                 function_mappings.append(
                     ArchiveMapping(
                         source_file_name=source_file_name,
                         archive_file_name=relative_file_name))
-        requirements_digest = requirements_digest.hexdigest()
-        function_digest = function_digest.hexdigest()
 
-        _logger.debug(
-            'Requirements file mappings:\n%s',
-            '\n'.join(f'  {mapping.archive_file_name}: {mapping.source_file_name}' for mapping in requirements_mappings))
-        _logger.debug(
-            'Function file mappings:\n%s',
-            '\n'.join(f'  {mapping.archive_file_name}: {mapping.source_file_name}' for mapping in function_mappings))
+        requirements_digest = get_digest((mapping.source_file_name for mapping in requirements_mappings))
+        function_digest = get_digest((mapping.source_file_name for mapping in function_mappings))
+
+        if _logger.isEnabledFor(logging.DEBUG):
+            def _log(header: str, mappings: Sequence[ArchiveMapping]):
+                with StringIO() as message:
+                    message.write(header)
+                    for mapping in sorted(mappings, key=lambda item: item.archive_file_name):
+                        message.write(f'  {mapping.archive_file_name}: {mapping.source_file_name}\n')
+                    _logger.debug(message.getvalue())
+            _log('Requirements file mappings:\n', requirements_mappings)
+            _log('Function file mappings:\n', function_mappings)
 
         _logger.info('Requirements digest: %s', requirements_digest)
         _logger.info('Function digest: %s', function_digest)
@@ -167,11 +150,9 @@ class Drover:
         upload_bucket: S3BucketPath = self.stage.upload_bucket
         s3_client = boto3.client('s3', region_name=upload_bucket.region_name)
 
-        if self.interactive:
-            progress = tqdm.tqdm(desc=description, leave=False, total=file_size, unit='B', unit_scale=True)
-            callback = progress.update
-        else:
-            callback = None
+        progress = tqdm.tqdm(desc=description, leave=False, total=file_size, unit='B', unit_scale=True,
+                             disable=not self.interactive)
+        callback = progress.update
 
         key = f'{upload_bucket.prefix}{file_name.name}'
         s3_client.upload_file(
@@ -318,17 +299,28 @@ class Drover:
 
 def main():
     """The main command-line entry point for the Drover interface"""
-    logging.basicConfig(format='%(message)s')
-    _logger.setLevel(logging.INFO)
 
     parser = argparse.ArgumentParser(description=__doc__.partition('\n')[0])
     parser.add_argument('--version', '-V', action='version', version=f'%(prog)s {__version__}')
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--interactive', action='store_true', help='enable interactive output (i.e. for a PTY)')
+    group.add_argument('--non-interactive', action='store_true', help='disable interactive output (i.e. for a PTY)')
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--verbose', '-v', action='count', default=0, help='increase output verbosity')
+    group.add_argument('--quiet', action='store_true', help='disable output')
     parser.add_argument('--settings-file', default=Path('drover.yml'), type=Path,
                         help='Settings file name (default: "drover.yml")')
     parser.add_argument('--install-path', default=Path(), type=Path,
                         help='Package install path (e.g. from "pip install -t"; default: working directory)')
     parser.add_argument('stage', type=str)
     arguments = parser.parse_args()
+
+    if not arguments.quiet:
+        logging.basicConfig(format='%(message)s')
+        logging_level = logging.INFO - (10 * arguments.verbose)
+        _logger.setLevel(logging_level)
+
+    interactive = True if arguments.interactive else False if arguments.non_interactive else sys.__stdin__.isatty()
 
     settings_file_name = arguments.settings_file
     install_path: Path = arguments.install_path
@@ -344,5 +336,5 @@ def main():
         _logger.error('Settings file does not exist: %s', e)
         sys.exit(1)
 
-    drover = Drover(settings, arguments.stage, interactive=True)
+    drover = Drover(settings, arguments.stage, interactive=interactive)
     drover.update(install_path)
