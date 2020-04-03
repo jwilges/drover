@@ -1,4 +1,5 @@
 """Generic functionality related to files and I/O"""
+import csv
 import hashlib
 import re
 import os
@@ -42,6 +43,7 @@ def get_digest(source_file_names: Sequence[Path], block_size: int = 8192) -> str
         source_file_names: A sequence of source file paths
 
     Returns: A SHA256 hash composed from the content of all source files."""
+    # See the PEP-376 RECORD file specification: <https://www.python.org/dev/peps/pep-0376/#record>
     package_record_pattern = re.compile(r'\.dist-info/RECORD$')
     digest = hashlib.sha256()
     full = set(source_file_names)
@@ -50,11 +52,12 @@ def get_digest(source_file_names: Sequence[Path], block_size: int = 8192) -> str
         if package_record_pattern.search(str(source_file_name)):
             package_parent_path = source_file_name.parent.parent
             with open(source_file_name, 'r') as record:
-                for item in record:
-                    item_name, item_hash, _other = item.rsplit(',', maxsplit=3)
+                reader = csv.reader(record, delimiter=',', quotechar='"', lineterminator=os.linesep)
+                for item in reader:
+                    item_name, item_hash, _other = item[:3]
                     item_name = package_parent_path / item_name
                     if item_hash and item_name in full:
-                        digest.update(item_hash.encode())
+                        digest.update((str(item_name) + item_hash).encode())
                         done.add(item_name)
     remaining = sorted(full - done)
     for source_file_name in remaining:
@@ -88,8 +91,7 @@ def write_archive(archive_file_name: Path, archive_mappings: Iterable[ArchiveMap
 
     Args:
         archive_file_name: a writable file
-        archive_mappings: an iterable of mappings of filesystem file names to archive file names
-    """
+        archive_mappings: an iterable of mappings of filesystem file names to archive file names"""
     with zipfile.ZipFile(archive_file_name, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         for mapping in archive_mappings:
             archive.write(filename=mapping.source_file_name, arcname=mapping.archive_file_name)

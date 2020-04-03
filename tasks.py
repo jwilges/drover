@@ -37,6 +37,7 @@ def coverage_xml(context):
 
 @task
 def wheel(context):
+    context.run('pip install wheel')
     release_paths = [Path(path) for path in ('build', 'dist')]
     for path in release_paths:
         if path.exists():
