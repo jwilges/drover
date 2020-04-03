@@ -59,7 +59,10 @@ def get_digest(source_file_names: Sequence[Path], block_size: int = 8192) -> str
     remaining = sorted(full - done)
     for source_file_name in remaining:
         with open(source_file_name, 'rb') as source_file:
-            while source_data := source_file.read(block_size):
+            while True:
+                source_data = source_file.read(block_size)
+                if not source_data:
+                    break
                 digest.update(source_data)
     return digest.hexdigest()
 

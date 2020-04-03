@@ -69,18 +69,20 @@ setuptools.setup(
     entry_points={
         'console_scripts': ['drover=drover:main'],
     },
-    python_requires='>=3.7',
+    python_requires='>=3.6',
     install_requires=[
         'boto3>=1.12',
         'botocore>=1.15',
         'pydantic>=1.4',
         'pyyaml>=5.3',
         'tqdm>=4.44',
+        'dataclasses; python_version < "3.7"'
     ],
     classifiers=[
         'Development Status :: 4 - Beta',
         'Operating System :: POSIX :: Linux',
         'Operating System :: MacOS :: MacOS X',
+        'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
         'Environment :: Console',
