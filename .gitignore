@@ -3,11 +3,12 @@
 
 .pytest_cache
 
-.coverage
-coverage.xml
+/.coverage
+/htmlcov
+/coverage.xml
 
-build
-dist
+/build
+/dist
 
 __pycache__
 *.py[cdo]

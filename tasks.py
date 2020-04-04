@@ -23,16 +23,24 @@ def lint(context):
     context.run('pylint --disable C,R drover')
 
 
+def coverage_base(context, mode):
+    context.run(add_proxy_arguments('coverage run -m pytest'))
+    context.run(f'coverage {mode}')
+
+
 @task
 def coverage(context):
-    context.run(add_proxy_arguments('coverage run -m pytest'))
-    context.run('coverage report')
+    coverage_base(context, 'report')
 
 
 @task
 def coverage_xml(context):
-    context.run(add_proxy_arguments('coverage run -m pytest'))
-    context.run('coverage xml')
+    coverage_base(context, 'xml')
+
+
+@task
+def coverage_html(context):
+    coverage_base(context, 'html')
 
 
 @task
