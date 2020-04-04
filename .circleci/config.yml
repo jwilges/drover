@@ -127,7 +127,7 @@ workflows:
           python: << matrix.python >>
           matrix:
             parameters:
-              python: ["3.7", << pipeline.parameters.python >>]
+              python: ["3.6", "3.7", << pipeline.parameters.python >>]
       - package:
           filters:
             branches:
