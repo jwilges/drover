@@ -52,7 +52,7 @@ def main():
     if not arguments.quiet:
         logging.basicConfig(format='%(message)s', stream=sys.stdout)
         logging_level = max(1, logging.INFO - (10 * arguments.verbose))
-        _logger.setLevel(logging_level)
+        logging.getLogger(__name__.split('.')[0]).setLevel(logging_level)
 
     interactive = True if arguments.interactive else False if arguments.non_interactive else sys.__stdin__.isatty()
 

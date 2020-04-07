@@ -24,8 +24,15 @@ class Stage(BaseModel):
     compatible_runtime: str
     function_file_patterns: Sequence[Pattern]
     function_extra_paths: Sequence[Path] = []
+    requirements_layer_name: Optional[str]
+    supplemental_layer_arns: Sequence[str] = []
     package_exclude_patterns: Sequence[Pattern] = [re.compile(r'.*__pycache__.*')]
     upload_bucket: Optional[S3BucketPath]
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if not self.requirements_layer_name:
+            self.requirements_layer_name = f'{self.function_name}-requirements'
 
 
 class Settings(BaseModel):

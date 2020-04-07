@@ -1,0 +1,12 @@
+stages:
+  production:
+    region_name: us-east-1
+    function_name: basic-lambda
+    compatible_runtime: python3.8
+    function_file_patterns:
+      - '^basic_lambda.*'
+    function_extra_paths:
+      - instance
+    upload_bucket:
+      region_name: us-east-1
+      bucket_name: drover-examples

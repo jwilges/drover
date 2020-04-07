@@ -6,7 +6,7 @@ import hashlib
 import re
 import os
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Pattern, Sequence
 
@@ -16,6 +16,15 @@ class ArchiveMapping:
     """A mapping between an archive file name and its corresponding source filesystem path"""
     source_file_name: Path
     archive_file_name: Path
+
+
+@dataclass
+class FunctionLayerMappings:
+    """A function and requirements layer mapping and digest container"""
+    function_mappings: Sequence[ArchiveMapping] = field(default=list)
+    function_digest: str = None
+    requirements_mappings: Sequence[ArchiveMapping] = field(default=list)
+    requirements_digest: str = None
 
 
 def format_file_size(size_in_bytes: float) -> str:
@@ -51,6 +60,8 @@ def get_digest(source_file_names: Sequence[Path], block_size: int = 8192) -> str
     digest = hashlib.sha256()
     full = set(source_file_names)
     done = set()
+    if not full:
+        return None
     for source_file_name in sorted(full):
         if package_record_pattern.search(str(source_file_name)):
             package_parent_path = source_file_name.parent.parent

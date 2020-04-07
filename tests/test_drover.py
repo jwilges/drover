@@ -61,7 +61,7 @@ class TestDrover(TestCase):
         assert drover.settings == expected_settings
         assert drover.interactive == expected_interactive
         assert drover.stage == expected_stage
-        assert drover.requirements_layer_name == expected_requirements_layer_name
+        assert drover.stage.requirements_layer_name == expected_requirements_layer_name
         assert drover.compatible_runtime_library_path == expected_compatible_runtime_library_path
         assert drover.lambda_client == mock_boto3_client
 
