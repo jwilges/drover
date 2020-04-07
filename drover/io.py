@@ -1,5 +1,7 @@
 """Generic functionality related to files and I/O"""
 import csv
+import email.parser
+import email.policy
 import hashlib
 import re
 import os
@@ -45,6 +47,7 @@ def get_digest(source_file_names: Sequence[Path], block_size: int = 8192) -> str
     Returns: A SHA256 hash composed from the content of all source files."""
     # See the PEP-376 RECORD file specification: <https://www.python.org/dev/peps/pep-0376/#record>
     package_record_pattern = re.compile(r'\.dist-info/RECORD$')
+    egg_information_pattern = re.compile(r'\.egg-info/PKG-INFO$')
     digest = hashlib.sha256()
     full = set(source_file_names)
     done = set()
@@ -55,18 +58,24 @@ def get_digest(source_file_names: Sequence[Path], block_size: int = 8192) -> str
                 reader = csv.reader(record, delimiter=',', quotechar='"', lineterminator=os.linesep)
                 for item in reader:
                     item_name, item_hash, _other = item[:3]
-                    item_name = package_parent_path / item_name
-                    if item_hash and item_name in full:
+                    source_file_name = package_parent_path / item_name
+                    if item_hash and source_file_name in full:
                         digest.update((str(item_name) + item_hash).encode())
-                        done.add(item_name)
-    remaining = sorted(full - done)
-    for source_file_name in remaining:
+                        done.add(source_file_name)
+    remaining = full - done
+    for source_file_name in sorted(remaining):
         with open(source_file_name, 'rb') as source_file:
-            while True:
-                source_data = source_file.read(block_size)
-                if not source_data:
-                    break
-                digest.update(source_data)
+            if egg_information_pattern.search(str(source_file_name)):
+                # Ensure deterministic field order from PKG-INFO files
+                # See: https://www.python.org/dev/peps/pep-0314/#including-metadata-in-packages
+                parser = email.parser.BytesHeaderParser(policy=email.policy.default)
+                source_headers = sorted(parser.parse(source_file).items())
+                for header, value in source_headers:
+                    digest.update(header.encode())
+                    digest.update(value.encode())
+            else:
+                digest.update(source_file.read())
+
     return digest.hexdigest()
 
 
