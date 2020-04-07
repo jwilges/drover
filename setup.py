@@ -67,7 +67,7 @@ setuptools.setup(
     license='BSD',
     packages=setuptools.find_packages(exclude=['tests*']),
     entry_points={
-        'console_scripts': ['drover=drover:main'],
+        'console_scripts': ['drover=drover.cli:main'],
     },
     python_requires='>=3.6',
     install_requires=[

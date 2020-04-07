@@ -54,7 +54,7 @@ def get_digest(source_file_names: Sequence[Path], block_size: int = 8192) -> str
     for source_file_name in sorted(full):
         if package_record_pattern.search(str(source_file_name)):
             package_parent_path = source_file_name.parent.parent
-            with open(source_file_name, 'r') as record:
+            with open(source_file_name, 'r', buffering=block_size) as record:
                 reader = csv.reader(record, delimiter=',', quotechar='"', lineterminator=os.linesep)
                 for item in reader:
                     item_name, item_hash, _other = item[:3]
@@ -64,7 +64,7 @@ def get_digest(source_file_names: Sequence[Path], block_size: int = 8192) -> str
                         done.add(source_file_name)
     remaining = full - done
     for source_file_name in sorted(remaining):
-        with open(source_file_name, 'rb') as source_file:
+        with open(source_file_name, 'rb', buffering=block_size) as source_file:
             if egg_information_pattern.search(str(source_file_name)):
                 # Ensure deterministic field order from PKG-INFO files
                 # See: https://www.python.org/dev/peps/pep-0314/#including-metadata-in-packages
