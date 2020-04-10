@@ -6,6 +6,7 @@ import subprocess
 import sys
 
 import setuptools
+from sphinx.setup_command import BuildDoc
 
 
 def read(*path_parts, iterate_lines=False):
@@ -27,6 +28,8 @@ def get_version(*path_parts) -> str:
 HERE = os.path.abspath(os.path.dirname(__file__))
 VERSION = get_version(HERE, 'drover', '__init__.py')
 LONG_DESCRIPTION = read(HERE, 'README.md')
+NAME = 'drover'
+AUTHOR = 'Jeffrey Wilges'
 
 
 class ValidateTagCommand(distutils.cmd.Command):
@@ -56,9 +59,9 @@ class ValidateTagCommand(distutils.cmd.Command):
 
 
 setuptools.setup(
-    name='drover',
+    name=NAME,
     version=VERSION,
-    author='Jeffrey Wilges',
+    author=AUTHOR,
     author_email='jeffrey@wilges.com',
     description='a command-line utility to deploy Python packages to Lambda functions',
     long_description=LONG_DESCRIPTION,
@@ -93,6 +96,13 @@ setuptools.setup(
         'Topic :: Utilities'
     ],
     cmdclass={
-        'validate_tag': ValidateTagCommand
-    }
+        'validate_tag': ValidateTagCommand,
+        'build_sphinx': BuildDoc
+    },
+    command_options={
+        'build_sphinx': {
+            'source_dir': ('setup.py', 'docs'),
+            'build_dir': ('setup.py', 'docs/_build')
+        }
+    },
 )

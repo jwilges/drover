@@ -4,8 +4,10 @@
 .pytest_cache
 
 /.coverage
-/htmlcov
+/coverage-html
 /coverage.xml
+
+/docs/_build
 
 /build
 /dist

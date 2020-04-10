@@ -6,14 +6,15 @@
 	],
 	"settings": {
 		"files.exclude": {
+			".git": true,
+			".nox": true,
+			".vscode": true,
+			".coverage": true,
+			"coverage.xml": true,
+			"*.egg-info": true,
 			"**/.DS_Store": true,
-			"**/.git": true,
-			"**/.vscode": true,
-			"**/.nox": true,
 			"**/.pytest_cache": true,
-			"**/.coverage": true,
-			"**/__pycache__": true,
-			"**/*.egg-info": true
+			"**/__pycache__": true
 		},
 		"python.venvPath": "${workspaceFolder}/.nox",
 		"python.linting.enabled": true,

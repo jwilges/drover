@@ -44,6 +44,13 @@ def coverage_html(context):
 
 
 @task
+def docs_html(context):
+    source_path = (Path(__file__).parent / 'docs').absolute()
+    context.run(f'sphinx-apidoc --force --output-dir "{str(source_path)}" "drover"')
+    context.run('python setup.py build_sphinx')
+
+
+@task
 def wheel(context):
     context.run('pip install wheel')
     release_paths = [Path(path) for path in ('build', 'dist')]

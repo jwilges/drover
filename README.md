@@ -11,7 +11,7 @@
 This utility aims to provide a simple, repeatable, and efficient process for
 deploying a Python package as a Lambda.
 
-To encourage separating infrequently changing Python dependencies in a separate
+To encourage separating infrequently changing Python dependencies in a distinct
 "requirements" layer, by default `drover` requires a list of regular expressions
 to define which files to include in the Lambda function; all other files are
 placed in a requirements layer that is then attached to the Lambda function.
