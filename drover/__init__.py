@@ -20,7 +20,7 @@ from drover.io import (ArchiveMapping, FunctionLayerMappings,
                        format_file_size, get_digest, get_relative_file_names, write_archive)
 from drover.models import S3BucketFileVersion, S3BucketPath, Settings, Stage
 
-__version__ = '0.7.1'
+__version__ = '0.7.2.dev1'
 _logger = logging.getLogger(__name__)
 
 
@@ -116,8 +116,6 @@ class Drover:
         function_tags: Mapping[str, str] = function_response.get('Tags', {})
         head_requirements_digest = function_tags.get('HeadRequirementsDigest')
         head_requirements_layer_arn = function_tags.get('HeadRequirementsLayerArn')
-        head_function_layer_arns = [arn for arn in (*self.stage.supplemental_layer_arns,
-                                                    head_requirements_layer_arn) if arn]
         head_function_digest = function_tags.get('HeadFunctionDigest')
 
         head_requirements_layer_arn_missing = True
@@ -146,6 +144,9 @@ class Drover:
             function_tags.pop('HeadRequirementsLayerArn', None)
             _logger.info('Skipping requirements upload')
 
+        head_function_layer_arns = [arn for arn in (*self.stage.supplemental_layer_arns,
+                                                    head_requirements_layer_arn) if arn]
+
         if function_runtime != self.stage.compatible_runtime or function_layer_arns != head_function_layer_arns:
             _logger.info('Updating function resource...')
             try:
@@ -156,7 +157,7 @@ class Drover:
             except botocore.exceptions.BotoCoreError as e:
                 raise UpdateError(f'Failed to update function "{self.stage.function_name}" runtime and layers: {e}')
             _logger.info('Updated function "%s" resource; runtime: "%s"; layers: %s',
-                         self.stage.function_name, self.stage.compatible_runtime, function_layer_arns)
+                         self.stage.function_name, self.stage.compatible_runtime, head_function_layer_arns)
 
         if not head_function_digest or head_function_digest != mappings.function_digest:
             self._upload_function_archive(mappings.function_mappings)

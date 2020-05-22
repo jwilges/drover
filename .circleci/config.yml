@@ -51,6 +51,8 @@ jobs:
     working_directory: ~/build
     steps:
       - checkout
+      - initialize_environment:
+          session: dev-<< parameters.python >>
       - run:
           name: Validate version tag "<< pipeline.git.tag >>"
           command: python setup.py validate_tag
