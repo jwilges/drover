@@ -1,9 +1,10 @@
 # drover
-*drover: a command-line utility to deploy Python packages to AWS Lambda functions*
+*drover: a command-line utility for deploying Python packages to Lambda functions.*
 
-[![circleci](https://img.shields.io/circleci/build/gh/jwilges/drover/master)](https://circleci.com/gh/jwilges/drover/tree/master)
+[![build](https://img.shields.io/azure-devops/build/jwilges/drover/4/master)](https://jwilges.visualstudio.com/drover/_build?definitionId=4)
 [![documentation](https://img.shields.io/readthedocs/drover/latest)](https://drover.readthedocs.io/en/latest/?badge=latest)
-[![codecov](https://img.shields.io/codecov/c/gh/jwilges/drover/master)](https://codecov.io/gh/jwilges/drover/branch/master)
+[![tests](https://img.shields.io/azure-devops/tests/jwilges/drover/4/master?compact_message)](https://jwilges.visualstudio.com/drover/_test/analytics?definitionId=4&contextType=build)
+![coverage](https://img.shields.io/azure-devops/coverage/jwilges/drover/4/master)
 ![license](https://img.shields.io/github/license/jwilges/drover)
 ![pypi python versions](https://img.shields.io/pypi/pyversions/drover)
 [![pypi release](https://img.shields.io/pypi/v/drover)](https://pypi.org/project/drover)

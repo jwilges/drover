@@ -1,0 +1,236 @@
+trigger:
+  branches:
+    include:
+    - master
+    - staging
+    - feature/*
+  tags:
+    include:
+    - v*
+
+parameters:
+- name: 'python_build_version'
+  displayName: 'Python Build Version'
+  default: '3.8'
+- name: 'is_release_tag'
+  displayName: 'Is Release Tag'
+  default: startsWith(variables['Build.SourceBranch'], 'refs/tags/v')
+
+variables:
+  PIP_CACHE_DIR: $(Pipeline.Workspace)/.pip
+
+stages:
+- stage: build
+  displayName: Build
+  jobs:
+  - job:
+    displayName: 'Static Analysis'
+    pool:
+      vmImage: 'ubuntu-18.04'
+    steps:
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '${{ parameters.python_build_version }}'
+    - task: Cache@2
+      inputs:
+        key: '"python${{ parameters.python_build_version }}" | "$(Agent.OS)" | requirements.dev.txt | requirements.txt'
+        restoreKeys: | 
+          "python${{ parameters.python_build_version }}" | "$(Agent.OS)"
+          "python${{ parameters.python_build_version }}"
+        path: $(PIP_CACHE_DIR)
+      displayName: Cache pip packages
+    - script: |
+        pip install -c requirements.dev.txt wheel
+        pip install -c requirements.dev.txt -r requirements.dev.in
+        python setup.py --version
+        pip install -c requirements.txt .
+      displayName: 'Install package and dependencies'
+    - script: |
+        invoke lint
+      displayName: 'Run pylint'
+    - script: |
+        invoke mypy
+      displayName: 'Run mypy'
+      condition: succeededOrFailed()
+      enabled: false
+    - script: |
+        invoke bandit
+      displayName: 'Run bandit'
+      condition: succeededOrFailed()
+    - script: |
+        invoke yapf
+      displayName: 'Run yapf'
+      condition: succeededOrFailed()
+      enabled: false
+    - script: |
+        invoke isort
+      displayName: 'Run isort'
+      condition: succeededOrFailed()
+
+  - job:
+    displayName: 'Run Tests:'
+    pool:
+      vmImage: 'ubuntu-18.04'
+    strategy:
+      matrix:
+        'Python 3.6':
+          python.version: '3.6'
+        'Python 3.7':
+          python.version: '3.7'
+        'Python 3.8':
+          python.version: '3.8'
+    steps:
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '$(python.version)'
+    - task: Cache@2
+      inputs:
+        key: '"python$(python.version)" | "$(Agent.OS)" | requirements.dev.txt | requirements.txt'
+        restoreKeys: | 
+          "python$(python.version)" | "$(Agent.OS)"
+          "python$(python.version)"
+        path: $(PIP_CACHE_DIR)
+      displayName: Cache pip packages
+    - script: |
+        pip install -c requirements.dev.txt wheel
+        pip install -c requirements.dev.txt -r requirements.dev.in
+        python setup.py --version
+        pip install -c requirements.txt .
+      displayName: 'Install package and dependencies'
+    - script: |
+        invoke coverage-xml -- --junitxml="junit/test-results-$(python.version).xml"
+      displayName: 'Run tests and generate code coverage results'
+    - task: PublishTestResults@2
+      displayName: 'Publish test results for Python $(python.version)'
+      condition: succeededOrFailed()
+      inputs:
+        testRunTitle: 'Python $(python.version)'
+        testResultsFormat: 'JUnit'
+        testResultsFiles: 'junit/test-results-$(python.version).xml'
+        failTaskOnFailedTests: true
+    - task: PublishCodeCoverageResults@1
+      displayName: 'Publish code coverage results for Python $(python.version)'
+      condition: eq(variables['python.version'], '${{ parameters.python_build_version }}')
+      inputs:
+        codeCoverageTool: Cobertura
+        summaryFileLocation: '$(System.DefaultWorkingDirectory)/coverage.xml'
+
+- stage: package
+  displayName: Package
+  dependsOn: build
+  jobs:
+  - job:
+    displayName: 'Build Package'
+    pool:
+      vmImage: 'ubuntu-18.04'
+    steps:
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '${{ parameters.python_build_version }}'
+    - task: Cache@2
+      inputs:
+        key: '"python${{ parameters.python_build_version }}" | "$(Agent.OS)" | requirements.dev.txt | requirements.txt'
+        restoreKeys: | 
+          "python${{ parameters.python_build_version }}" | "$(Agent.OS)"
+          "python${{ parameters.python_build_version }}"
+        path: $(PIP_CACHE_DIR)
+      displayName: Cache pip packages
+    - script: |
+        pip install -c requirements.dev.txt wheel
+        pip install -c requirements.dev.txt -r requirements.dev.in
+        python setup.py sdist bdist_wheel
+      displayName: 'Build package'
+    - publish: '$(System.DefaultWorkingDirectory)/dist'
+      artifact: drover
+      displayName: 'Publish Package Build Artifacts'
+
+- stage: release
+  displayName: Release
+  dependsOn: package
+  condition: ${{ parameters.is_release_tag }}
+  jobs:
+  - job: validate_tag
+    displayName: 'Validate Release Tag'
+    steps:
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '${{ parameters.python_build_version }}'
+    - task: Cache@2
+      inputs:
+        key: '"python${{ parameters.python_build_version }}" | "$(Agent.OS)" | requirements.dev.txt | requirements.txt'
+        restoreKeys: | 
+          "python${{ parameters.python_build_version }}" | "$(Agent.OS)"
+          "python${{ parameters.python_build_version }}"
+        path: $(PIP_CACHE_DIR)
+      displayName: Cache pip packages
+    - script: |
+        pip install -c requirements.dev.txt setuptools_scm
+        python setup.py --version
+        python setup.py validate_tag --output-azure-variables
+      name: tag
+      displayName: 'Validate Release Tag'
+
+  - job: github_release
+    displayName: 'GitHub Release'
+    dependsOn: validate_tag
+    variables:
+      is_prerelease: $[ dependencies.validate_tag.outputs['tag.is_prerelease'] ]
+    steps:
+    - download: current
+      artifact: drover
+      patterns: '*'
+      displayName: 'Download Package Build Artifacts'
+    - script: |
+        if [ "$(git cat-file -t '$(Build.SourceBranch)')" == "tag" ]; then
+          git for-each-ref --format='# %(contents)' '$(Build.SourceBranch)' > /tmp/annotation.md
+        else
+          echo '# Release $(Build.SourceBranchName)' > /tmp/annotation.md
+        fi
+      displayName: 'Prepare Release Notes'
+    - task: GitHubRelease@0 # See: <https://docs.microsoft.com/en-us/azure/devops/pipelines/tasks/utility/github-release?view=azure-devops>
+      displayName: 'Create GitHub Release'
+      inputs:
+        gitHubConnection: github-jwilges
+        repositoryName: '$(Build.Repository.Name)'
+        action: create
+        target: '$(Build.SourceVersion)'
+        tagSource: auto
+        title: '$(Build.SourceBranchName)'
+        releaseNotesSource: file
+        releaseNotesFile: /tmp/annotation.md
+        assets: '$(Pipeline.Workspace)/drover/*'
+        assetUploadMode: delete
+        isDraft: false
+        isPreRelease: '$(is_prerelease)'
+        addChangeLog: true
+        changeLogType: commitBased
+        changeLogCompareToRelease: lastFullRelease
+
+  - job: pypi_release
+    displayName: 'PyPI Release'
+    dependsOn: [validate_tag, github_release]
+    steps:
+    - checkout: none
+    - download: current
+      artifact: drover
+      patterns: '*'
+      displayName: 'Download Package Build Artifacts'
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '${{ parameters.python_build_version }}'
+    - task: Cache@2
+      inputs:
+        key: '"python${{ parameters.python_build_version }}" | "$(Agent.OS)"'
+        restoreKeys: | 
+          "python${{ parameters.python_build_version }}" | "$(Agent.OS)"
+          "python${{ parameters.python_build_version }}"
+        path: $(PIP_CACHE_DIR)
+      displayName: Cache pip packages
+    - task: TwineAuthenticate@1
+      displayName: 'Authenticate Twine'
+      inputs:
+        pythonUploadServiceConnection: pypi
+    - script: |
+        pip install twine
+        python -m twine upload --repository "pypi" --config-file $(PYPIRC_PATH) "$(Pipeline.Workspace)/drover/*"
+      displayName: 'Upload package to PyPI'

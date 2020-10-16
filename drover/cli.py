@@ -7,7 +7,8 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
-from drover import __version__, Drover, SettingsError, UpdateError
+from drover import Drover, SettingsError, UpdateError
+from drover.__metadata__ import VERSION
 from drover.models import Settings
 
 _logger = logging.getLogger(__name__)
@@ -15,7 +16,7 @@ _logger = logging.getLogger(__name__)
 
 def _parse_arguments():
     parser = argparse.ArgumentParser(description=__doc__.partition('\n')[0])
-    parser.add_argument('--version', '-V', action='version', version=f'%(prog)s {__version__}')
+    parser.add_argument('--version', '-V', action='version', version=f'%(prog)s {VERSION}')
     group = parser.add_mutually_exclusive_group()
     group.add_argument('--verbose', '-v', action='count', default=0, help='increase output verbosity')
     group.add_argument('--quiet', action='store_true', help='disable output')

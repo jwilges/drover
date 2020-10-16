@@ -11,8 +11,10 @@
 			".vscode": true,
 			".coverage": true,
 			"coverage.xml": true,
+			".eggs": true,
 			"*.egg-info": true,
 			"**/.DS_Store": true,
+			"**/.mypy_cache": true,
 			"**/.pytest_cache": true,
 			"**/__pycache__": true
 		},

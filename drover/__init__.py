@@ -11,16 +11,21 @@ from io import StringIO
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, Iterable, List, Mapping, Optional, Pattern, Sequence
 
-import botocore
 import boto3
+import botocore
 import tqdm
 from pydantic import BaseModel
 
-from drover.io import (ArchiveMapping, FunctionLayerMappings,
-                       format_file_size, get_digest, get_relative_file_names, write_archive)
+from drover.io import (
+    ArchiveMapping,
+    FunctionLayerMappings,
+    format_file_size,
+    get_digest,
+    get_relative_file_names,
+    write_archive,
+)
 from drover.models import S3BucketFileVersion, S3BucketPath, Settings, Stage
 
-__version__ = '0.7.2.dev1'
 _logger = logging.getLogger(__name__)
 
 

@@ -1,77 +1,149 @@
-import ast
 import codecs
-import distutils
-import os.path
-import subprocess
+import re
 import sys
+from pathlib import Path
+from typing import List, MutableMapping, Optional, Sequence, Tuple, Type
 
 import setuptools
-from sphinx.setup_command import BuildDoc
 
 
-def read(*path_parts, iterate_lines=False):
-    source_file_name = os.path.join(*path_parts)
-    if not os.path.isfile(source_file_name):
+def _read(source_file_name: Path):
+    if not source_file_name.is_file():
         raise FileNotFoundError(source_file_name)
-    with codecs.open(source_file_name, 'r') as source_file:
-        return source_file.readlines() if iterate_lines else source_file.read()
+    with codecs.open(str(source_file_name), 'r') as source_file:
+        return source_file.read()
 
 
-def get_version(*path_parts) -> str:
-    # See: <https://packaging.python.org/guides/single-sourcing-package-version/>
-    for line in read(*path_parts, iterate_lines=True):
-        if line.startswith('__version__'):
-            return ast.parse(line).body[0].value.s
-    raise RuntimeError('Unable to determine version.')
+HERE = Path().parent.absolute()
+PACKAGE_PATH = HERE / 'drover'
+
+LONG_DESCRIPTION = _read(HERE / 'README.md')
+METADATA = {
+    'name': 'drover',
+    'author': 'Jeffrey Wilges',
+    'author_email': 'jeffrey@wilges.com',
+    'description': 'drover is a command-line utility for deploying Python packages to Lambda functions.',
+    'url': 'https://github.com/jwilges/drover',
+    'license': 'BSD'
+}
+METADATA_TEMPLATE = '\n'.join((
+    "VERSION = '{version}'",
+    *(
+        f"{key.upper()} = '{value.replace('{', '{{').replace('}', '}}')}'"
+        for key, value in METADATA.items()
+    ),
+    '' # final newline
+))
+
+OPTIONAL_COMMAND_CLASSES: MutableMapping[str, Type] = {}
+OPTIONAL_COMMAND_OPTIONS: MutableMapping[str, MutableMapping[str, Sequence[str]]] = {}
+
+try:
+    from sphinx.setup_command import BuildDoc
+    OPTIONAL_COMMAND_CLASSES['build_sphinx'] = BuildDoc
+    OPTIONAL_COMMAND_OPTIONS['build_sphinx'] = {
+        'source_dir': ('setup.py', 'docs'),
+        'build_dir': ('setup.py', 'docs/_build')
+    }
+except ImportError:
+    pass
 
 
-HERE = os.path.abspath(os.path.dirname(__file__))
-VERSION = get_version(HERE, 'drover', '__init__.py')
-LONG_DESCRIPTION = read(HERE, 'README.md')
-NAME = 'drover'
-AUTHOR = 'Jeffrey Wilges'
-
-
-class ValidateTagCommand(distutils.cmd.Command):
-    """A validator that ensures the package version matches the current git tag"""
+class ValidateTagCommand(setuptools.Command):
+    """A validator that ensures the package version both is in the canonical form per
+    PEP-440 and matches the current git tag"""
     description = 'validate that the package version matches the current git tag'
-    user_options = []
+    user_options: List[Tuple[str, Optional[str], str]] = [
+        ('output-azure-variables', None, 'Output Azure Pipeline version variables'),
+    ]
+
+    VERSION_PATTERN = r'''
+        v?
+        (?:
+            (?:(?P<epoch>[0-9]+)!)?                           # epoch
+            (?P<release>[0-9]+(?:\.[0-9]+)*)                  # release segment
+            (?P<pre>                                          # pre-release
+                [-_\.]?
+                (?P<pre_l>(a|b|c|rc|alpha|beta|pre|preview))
+                [-_\.]?
+                (?P<pre_n>[0-9]+)?
+            )?
+            (?P<post>                                         # post release
+                (?:-(?P<post_n1>[0-9]+))
+                |
+                (?:
+                    [-_\.]?
+                    (?P<post_l>post|rev|r)
+                    [-_\.]?
+                    (?P<post_n2>[0-9]+)?
+                )
+            )?
+            (?P<dev>                                          # dev release
+                [-_\.]?
+                (?P<dev_l>dev)
+                [-_\.]?
+                (?P<dev_n>[0-9]+)?
+            )?
+        )
+        (?:\+(?P<local>[a-z0-9]+(?:[-_\.][a-z0-9]+)*))?       # local version
+    '''
+    VERSION_FORMAT = re.compile(
+        r'^\s*' + VERSION_PATTERN + r'\s*$',
+        re.VERBOSE | re.IGNORECASE,
+    )
 
     def initialize_options(self):
-        pass
+        self.output_azure_variables = False
 
     def finalize_options(self):
         pass
 
     def run(self):
-        """Run command."""
-        git_tag_process = subprocess.run(['git', 'tag', '--list', '--points-at', 'HEAD'],
-                                         check=False, capture_output=True, universal_newlines=True)
+        """Warn and exit if the package version either:
+            a) is not in the canonical format per PEP-440 or,
+            b) does not match any HEAD git tag version."""
+        import setuptools_scm
+        version = setuptools_scm.get_version(relative_to=Path(__file__))
 
-        if git_tag_process.returncode != 0:
-            self.warn(f'failed to execute `git tag` command')
-            sys.exit(git_tag_process.returncode)
+        if self.output_azure_variables:
+            print(f'##vso[task.setvariable variable=is_prerelease;isOutput=true;]{self.is_prerelease(version)!s}')
 
-        git_tags = [tag.strip().lstrip('v') for tag in git_tag_process.stdout.splitlines()]
-        if VERSION not in git_tags:
-            self.warn(f'package version ({VERSION}) does not match any HEAD git tag version (tag versions: {git_tags})')
+        if not self.is_canonical(version):
+            self.warn(f'package version ({version}) is not in the canonical format per PEP-440')
             sys.exit(1)
+
+    @classmethod
+    def is_prerelease(cls, version: str) -> bool:
+        """Return true if `version` is a 'pre', 'dev', or 'local' release per PEP-440."""
+        version_match = cls.VERSION_FORMAT.match(version)
+        return (
+            version_match is None or
+            any(
+                value for key, value in version_match.groupdict().items()
+                if key in ('pre', 'dev', 'local')
+            )
+        )
+
+    @staticmethod
+    def is_canonical(version: str) -> bool:
+        """Return true if `version` is canonical per PEP-440."""
+        return re.match(r'^([1-9][0-9]*!)?(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*))*((a|b|rc)(0|[1-9][0-9]*))?(\.post(0|[1-9][0-9]*))?(\.dev(0|[1-9][0-9]*))?$', version) is not None
 
 
 setuptools.setup(
-    name=NAME,
-    version=VERSION,
-    author=AUTHOR,
-    author_email='jeffrey@wilges.com',
-    description='a command-line utility to deploy Python packages to Lambda functions',
+    **METADATA,
     long_description=LONG_DESCRIPTION,
     long_description_content_type='text/markdown',
-    url='https://github.com/jwilges/drover',
-    license='BSD',
     packages=setuptools.find_packages(exclude=['tests*']),
     entry_points={
         'console_scripts': ['drover=drover.cli:main'],
     },
+    use_scm_version={
+        'relative_to': Path(__file__),
+        'write_to': PACKAGE_PATH / '__metadata__.py',
+        'write_to_template': METADATA_TEMPLATE,
+    },
+    setup_requires=['setuptools_scm'],
     python_requires='>=3.6',
     install_requires=[
         'boto3>=1.12',
@@ -83,12 +155,12 @@ setuptools.setup(
     ],
     classifiers=[
         'Development Status :: 4 - Beta',
-        'Operating System :: POSIX :: Linux',
+        'Environment :: Console',
         'Operating System :: MacOS :: MacOS X',
+        'Operating System :: POSIX :: Linux',
         'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
-        'Environment :: Console',
         'Topic :: Software Development :: Build Tools',
         'Topic :: System :: Distributed Computing',
         'Topic :: System :: Networking',
@@ -97,12 +169,9 @@ setuptools.setup(
     ],
     cmdclass={
         'validate_tag': ValidateTagCommand,
-        'build_sphinx': BuildDoc
+        **OPTIONAL_COMMAND_CLASSES
     },
     command_options={
-        'build_sphinx': {
-            'source_dir': ('setup.py', 'docs'),
-            'build_dir': ('setup.py', 'docs/_build')
-        }
+        **OPTIONAL_COMMAND_OPTIONS
     },
 )

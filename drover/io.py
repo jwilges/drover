@@ -3,8 +3,8 @@ import csv
 import email.parser
 import email.policy
 import hashlib
-import re
 import os
+import re
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path

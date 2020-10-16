@@ -1,6 +1,7 @@
 .vscode
 .nox
 
+.mypy_cache
 .pytest_cache
 
 /.coverage
@@ -9,8 +10,11 @@
 
 /docs/_build
 
+/.eggs
 /build
 /dist
+
+/drover/__metadata__.py
 
 __pycache__
 *.py[cdo]
