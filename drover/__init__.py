@@ -113,7 +113,7 @@ class Drover:
         try:
             function_response = self.lambda_client.get_function(FunctionName=self.stage.function_name)
         except (botocore.exceptions.BotoCoreError, botocore.exceptions.ClientError) as e:
-            raise UpdateError(f'Unable to retrieve Lambda function "{self.stage.function_name}": {e}')
+            raise UpdateError(f'Unable to retrieve Lambda function "{self.stage.function_name}": {e}') from e
 
         function_arn = function_response['Configuration']['FunctionArn']
         function_layer_arns: List[str] = [layer['Arn'] for layer in function_response['Configuration'].get('Layers', [])]
@@ -160,7 +160,7 @@ class Drover:
                     Runtime=self.stage.compatible_runtime,
                     Layers=head_function_layer_arns)
             except botocore.exceptions.BotoCoreError as e:
-                raise UpdateError(f'Failed to update function "{self.stage.function_name}" runtime and layers: {e}')
+                raise UpdateError(f'Failed to update function "{self.stage.function_name}" runtime and layers: {e}') from e
             _logger.info('Updated function "%s" resource; runtime: "%s"; layers: %s',
                          self.stage.function_name, self.stage.compatible_runtime, head_function_layer_arns)
 
@@ -175,7 +175,7 @@ class Drover:
             try:
                 self.lambda_client.tag_resource(Resource=function_arn, Tags=function_tags)
             except (botocore.exceptions.BotoCoreError, botocore.exceptions.ClientError) as e:
-                raise UpdateError(f'Unable to update tags for Lambda function "{self.stage.function_name}": {e}')
+                raise UpdateError(f'Unable to update tags for Lambda function "{self.stage.function_name}": {e}') from e
 
     def _upload_file_to_bucket(self, file_name: Path) -> S3BucketFileVersion:
         upload_bucket: S3BucketPath = self.stage.upload_bucket
@@ -248,7 +248,7 @@ class Drover:
                     Content=file_arguments,
                     CompatibleRuntimes=[self.stage.compatible_runtime])
             except botocore.exceptions.BotoCoreError as e:
-                raise UpdateError(f'Failed to publish requirements layer for {self.stage.function_name}: {e}')
+                raise UpdateError(f'Failed to publish requirements layer for {self.stage.function_name}: {e}') from e
             finally:
                 if bucket_file:
                     self._delete_file_from_bucket(bucket_file)
@@ -302,7 +302,7 @@ class Drover:
                     DryRun=False,
                     **file_arguments)
             except botocore.exceptions.BotoCoreError as e:
-                raise RuntimeError(f'Failed to update function code for {self.stage.function_name}: {e}')
+                raise RuntimeError(f'Failed to update function code for {self.stage.function_name}: {e}') from e
             finally:
                 if bucket_file:
                     self._delete_file_from_bucket(bucket_file)
