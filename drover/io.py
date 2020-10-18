@@ -8,7 +8,7 @@ import re
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Pattern, Sequence
+from typing import Iterable, Optional, Pattern, Sequence
 
 
 @dataclass
@@ -47,7 +47,7 @@ def format_file_size(size_in_bytes: float) -> str:
     return f'{size_in_bytes:.2f} YiB'
 
 
-def get_digest(source_file_names: Sequence[Path], block_size: int = 8192) -> str:
+def get_digest(source_file_names: Sequence[Path], block_size: int = 8192) -> Optional[str]:
     """Return a SHA256 hash composed from the content of all source files.
 
     Args:

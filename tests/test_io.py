@@ -4,7 +4,12 @@ from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch, MagicMock
 
-from drover.io import ArchiveMapping, get_relative_file_names, write_archive
+from drover.io import ArchiveMapping, get_digest, get_relative_file_names, write_archive
+
+
+class TestGetDigest(TestCase):
+    def test_zero_file_digest_is_none(self):
+        assert get_digest(tuple()) is None
 
 
 class TestGetRelativeFileNames(TestCase):
