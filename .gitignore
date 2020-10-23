@@ -13,6 +13,8 @@
 /.eggs
 /build
 /dist
+/examples/*/build
+/examples/*/dist
 
 /drover/__metadata__.py
 

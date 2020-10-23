@@ -1,5 +1,5 @@
 """A basic Lambda that returns its version"""
-__version__ = '0.0.1'
+VERSION = '0.0.2'
 
 def lambda_handler(_event, _context):
-    return __version__
+    return VERSION
