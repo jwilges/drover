@@ -3,7 +3,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import IO, Optional, Tuple
 
 import yaml
 from pydantic import ValidationError
@@ -15,21 +15,26 @@ from drover.models import Settings
 _logger = logging.getLogger(__name__)
 
 
-class MaximumLogLevelLogFilter(logging.Filter):
-    """A log filter to omit records greater or equal to a specified log level."""
-    def __init__(self, maximum_level: int, name: str = ''):
+class LogLevelRangeFilter(logging.Filter):
+    """A log filter to omit records outside of an inclusive log level range."""
+    def __init__(
+        self,
+        minimum_level: int = logging.NOTSET,
+        maximum_level: int = logging.CRITICAL,
+        name: str = ''
+    ):
         super().__init__(name=name)
+        self.minimum_level = minimum_level
         self.maximum_level = maximum_level
 
     def filter(self, record) -> bool:
         """Return `True` if the record log level does not meet or exceed the maximum log level."""
-        return record.levelno < self.maximum_level
+        return record.levelno >= self.minimum_level and record.levelno <= self.maximum_level
 
 
 # yapf: disable
 def _parse_arguments() -> Tuple[argparse.ArgumentParser, argparse.Namespace]:
     root_parser = argparse.ArgumentParser(description=DESCRIPTION)
-    # root_subparsers = root_parser.add_subparsers(dest='action', required=True)
 
     root_parser.add_argument('--version', '-V', action='version', version=f'%(prog)s {VERSION}')
     group = root_parser.add_mutually_exclusive_group()
@@ -67,27 +72,51 @@ def _parse_settings(settings_file_name: Path) -> Settings:
 # yapf: enable
 
 
-def _configure_logging(verbosity: Optional[int]):
+def _get_stream_handler(
+    stream: IO,
+    log_format: str,
+    minimum_level: int = logging.NOTSET,
+    maximum_level: int = logging.CRITICAL
+) -> logging.Handler:
+    formatter = logging.Formatter(fmt=log_format)
+    handler = logging.StreamHandler(stream)
+    handler.addFilter(LogLevelRangeFilter(minimum_level, maximum_level))
+    handler.setFormatter(formatter)
+    handler.setLevel(minimum_level)
+    return handler
+
+
+def _configure_logging(verbosity: Optional[int] = None):
     if verbosity is not None:
-        console_level = max(1, logging.INFO - (10 * verbosity))
-        console_formatter = logging.Formatter(fmt='%(message)s')
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.addFilter(MaximumLogLevelLogFilter(logging.WARNING))
-        console_handler.setFormatter(console_formatter)
-        console_handler.setLevel(console_level)
-        error_formatter = logging.Formatter(fmt='%(levelname)s: %(message)s')
-        error_handler = logging.StreamHandler(sys.stderr)
-        error_handler.setFormatter(error_formatter)
-        error_handler.setLevel(logging.WARNING)
-        logging.basicConfig(handlers=(console_handler, error_handler), level=console_level)
-        _logger.setLevel(console_level)
+        package_level = max(1, logging.INFO - (10 * verbosity))
+        external_level = package_level if package_level < logging.DEBUG else logging.WARNING
+
+        package_handlers = (
+            _get_stream_handler(sys.stdout, '%(message)s', package_level, logging.WARNING - 1),
+            _get_stream_handler(sys.stderr, '%(levelname)s: %(message)s', logging.WARNING),
+        )
+        root_handlers = (
+            _get_stream_handler(
+                sys.stdout, '%(name)s: %(message)s', external_level, logging.WARNING - 1
+            ),
+            _get_stream_handler(
+                sys.stderr, '%(levelname)s: %(name)s: %(message)s', logging.WARNING
+            ),
+        )
+        logging.basicConfig(handlers=root_handlers, level=external_level)
+
+        package_logger = logging.getLogger(Drover.__module__)
+        package_logger.setLevel(package_level)
+        package_logger.propagate = False
+        for handler in package_handlers:
+            package_logger.addHandler(handler)
     else:
         logging.basicConfig(handlers=(logging.NullHandler(), ))
 
 
 def main():
     """The main command-line entry point for the Drover interface"""
-    argument_parser, arguments = _parse_arguments()
+    _argument_parser, arguments = _parse_arguments()
     _configure_logging(arguments.verbosity)
 
     settings_file_name = arguments.settings_file

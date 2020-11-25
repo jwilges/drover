@@ -21,10 +21,10 @@ class ArchiveMapping:
 @dataclass
 class FunctionLayerMappings:
     """A function and requirements layer mapping and digest container"""
-    function_mappings: Sequence[ArchiveMapping] = field(default=list)
-    function_digest: str = None
-    requirements_mappings: Sequence[ArchiveMapping] = field(default=list)
-    requirements_digest: str = None
+    function_mappings: Sequence[ArchiveMapping] = field(default_factory=list)
+    function_digest: Optional[str] = None
+    requirements_mappings: Sequence[ArchiveMapping] = field(default_factory=list)
+    requirements_digest: Optional[str] = None
 
 
 def format_file_size(size_in_bytes: float) -> str:
@@ -47,7 +47,7 @@ def format_file_size(size_in_bytes: float) -> str:
     return f'{size_in_bytes:.2f} YiB'
 
 
-def get_digest(source_file_names: Sequence[Path], block_size: int = 8192) -> Optional[str]:
+def get_digest(source_file_names: Iterable[Path], block_size: int = 8192) -> Optional[str]:
     """Return a SHA256 hash composed from the content of all source files.
 
     Args:
@@ -99,7 +99,8 @@ def get_relative_file_names(source_path: Path, exclude_patterns: Sequence[Patter
 
     Returns: an unsorted iterable of files recursively beneath the source path"""
     exclude_patterns = exclude_patterns or []
-    for root, _directory_names, file_names in os.walk(source_path):
+    # See: <https://stackoverflow.com/questions/36977259/avoiding-infinite-recursion-with-os-walk>
+    for root, _directory_names, file_names in os.walk(source_path, followlinks=True):
         for file_name in file_names:
             relative_file_name = Path(os.path.join(root, file_name)).relative_to(source_path)
             if not any([pattern.match(str(relative_file_name)) for pattern in exclude_patterns]):

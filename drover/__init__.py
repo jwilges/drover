@@ -49,7 +49,14 @@ class Drover:
 
         self.stage = self.settings.stages[stage]
         self.compatible_runtime_library_path = Drover._get_runtime_library_path(self.stage.compatible_runtime)
-        self.lambda_client = boto3.client('lambda', region_name=self.stage.region_name)
+        self.aws_client_config = botocore.config.Config(
+            region_name=self.stage.region_name,
+            retries={
+                'max_attempts': 10,
+                'mode': 'standard'
+            }
+        )
+        self.lambda_client = boto3.client('lambda', config=self.aws_client_config)
 
     def _get_function_layer_mappings(self, install_path: Path) -> FunctionLayerMappings:
         requirements_base_path = self.compatible_runtime_library_path
@@ -77,8 +84,8 @@ class Drover:
                         source_file_name=source_file_name,
                         archive_file_name=relative_file_name))
 
-        requirements_digest = get_digest((mapping.source_file_name for mapping in requirements_mappings))
-        function_digest = get_digest((mapping.source_file_name for mapping in function_mappings))
+        requirements_digest = get_digest(mapping.source_file_name for mapping in requirements_mappings)
+        function_digest = get_digest(mapping.source_file_name for mapping in function_mappings)
 
         if _logger.isEnabledFor(logging.DEBUG):
             def _log(header: str, mappings: Sequence[ArchiveMapping]):
@@ -177,9 +184,8 @@ class Drover:
             except (botocore.exceptions.BotoCoreError, botocore.exceptions.ClientError) as e:
                 raise UpdateError(f'Unable to update tags for Lambda function "{self.stage.function_name}": {e}') from e
 
-    def _upload_file_to_bucket(self, file_name: Path) -> S3BucketFileVersion:
-        upload_bucket: S3BucketPath = self.stage.upload_bucket
-        s3_client = boto3.client('s3', region_name=upload_bucket.region_name)
+    def _upload_file_to_bucket(self, upload_bucket: S3BucketPath, file_name: Path) -> S3BucketFileVersion:
+        s3_client = boto3.client('s3', config=self.aws_client_config, region_name=upload_bucket.region_name)
         file_size = float(file_name.stat().st_size)
         key = f'{upload_bucket.prefix}{file_name.name}'
         with tqdm.tqdm(total=file_size, unit='B', unit_divisor=1024, unit_scale=True, leave=True,
@@ -199,9 +205,8 @@ class Drover:
             key=key,
             version_id=response.get('VersionId'))
 
-    def _delete_file_from_bucket(self, bucket_file: S3BucketFileVersion):
-        upload_bucket = self.stage.upload_bucket
-        s3_client = boto3.client('s3', region_name=upload_bucket.region_name)
+    def _delete_file_from_bucket(self, upload_bucket: S3BucketPath, bucket_file: S3BucketFileVersion):
+        s3_client = boto3.client('s3', config=self.aws_client_config, region_name=upload_bucket.region_name)
         arguments = {
             'Bucket': bucket_file.bucket_name,
             'Key': bucket_file.key,
@@ -223,7 +228,7 @@ class Drover:
             if self.stage.upload_bucket:
                 _logger.info('Uploading requirements layer archive...')
                 try:
-                    bucket_file = self._upload_file_to_bucket(archive_file_name)
+                    bucket_file = self._upload_file_to_bucket(self.stage.upload_bucket, archive_file_name)
                     file_arguments = {
                         'S3Bucket': bucket_file.bucket_name,
                         'S3Key': bucket_file.key,
@@ -250,8 +255,8 @@ class Drover:
             except botocore.exceptions.BotoCoreError as e:
                 raise UpdateError(f'Failed to publish requirements layer for {self.stage.function_name}: {e}') from e
             finally:
-                if bucket_file:
-                    self._delete_file_from_bucket(bucket_file)
+                if self.stage.upload_bucket and bucket_file:
+                    self._delete_file_from_bucket(self.stage.upload_bucket, bucket_file)
 
             layer_version_arn = response['LayerVersionArn']
             layer_size_text = format_file_size(float(response['Content']['CodeSize']))
@@ -278,7 +283,7 @@ class Drover:
             if self.stage.upload_bucket:
                 _logger.info('Uploading function archive...')
                 try:
-                    bucket_file = self._upload_file_to_bucket(archive_file_name)
+                    bucket_file = self._upload_file_to_bucket(self.stage.upload_bucket, archive_file_name)
                     file_arguments = {
                         'S3Bucket': bucket_file.bucket_name,
                         'S3Key': bucket_file.key,
@@ -304,8 +309,8 @@ class Drover:
             except botocore.exceptions.BotoCoreError as e:
                 raise RuntimeError(f'Failed to update function code for {self.stage.function_name}: {e}') from e
             finally:
-                if bucket_file:
-                    self._delete_file_from_bucket(bucket_file)
+                if self.stage.upload_bucket and bucket_file:
+                    self._delete_file_from_bucket(self.stage.upload_bucket, bucket_file)
 
             function_arn = response['FunctionArn']
             function_size_text = format_file_size(float(response['CodeSize']))
