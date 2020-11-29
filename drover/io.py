@@ -8,23 +8,31 @@ import re
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Optional, Pattern, Sequence
+from typing import Iterable, List, Optional, Pattern, Sequence
 
 
 @dataclass
-class ArchiveMapping:
+class ArchiveFileMapping:
     """A mapping between an archive file name and its corresponding source filesystem path"""
     source_file_name: Path
     archive_file_name: Path
 
 
 @dataclass
-class FunctionLayerMappings:
-    """A function and requirements layer mapping and digest container"""
-    function_mappings: Sequence[ArchiveMapping] = field(default_factory=list)
-    function_digest: Optional[str] = None
-    requirements_mappings: Sequence[ArchiveMapping] = field(default_factory=list)
-    requirements_digest: Optional[str] = None
+class ArchiveMapResult:
+    mappings: Sequence[ArchiveFileMapping] = field(default_factory=list)
+    unmapped_files: Sequence[Path] = field(default_factory=list)
+
+
+@dataclass
+class ArchiveDescriptor:
+    """An archive file and cumulative digest descriptor"""
+    file_mappings: Sequence[ArchiveFileMapping] = field(default_factory=list)
+    digest: Optional[str] = None
+
+
+class ArchiveMapMultipleRootError(ValueError):
+    """An error while attempting to map all files for an archive relative to one common root path."""
 
 
 def format_file_size(size_in_bytes: float) -> str:
@@ -78,7 +86,7 @@ def get_digest(source_file_names: Iterable[Path], block_size: int = 8192) -> Opt
         with open(source_file_name, 'rb', buffering=block_size) as source_file:
             if egg_information_pattern.search(str(source_file_name)):
                 # Ensure deterministic field order from PKG-INFO files
-                # See: https://www.python.org/dev/peps/pep-0314/#including-metadata-in-packages
+                # See: <https://www.python.org/dev/peps/pep-0314/#including-metadata-in-packages>
                 parser = email.parser.BytesHeaderParser(policy=email.policy.default)
                 source_headers = sorted(parser.parse(source_file).items())
                 for header, value in source_headers:
@@ -90,24 +98,69 @@ def get_digest(source_file_names: Iterable[Path], block_size: int = 8192) -> Opt
     return digest.hexdigest()
 
 
-def get_relative_file_names(source_path: Path, exclude_patterns: Sequence[Pattern] = None) -> Iterable[Path]:
-    """Return an unsorted iterable of files recursively beneath the source path
+def iter_file_names(source_path: Path) -> Iterable[Path]:
+    """Return an unsorted iterable of file names recursively beneath the source path
 
     Args:
         source_path: a filesystem path from which to recursively iterate all files
-        exclude_patterns: an optional sequence of regular expressions which will be used to exclude files
 
-    Returns: an unsorted iterable of files recursively beneath the source path"""
-    exclude_patterns = exclude_patterns or []
-    # See: <https://stackoverflow.com/questions/36977259/avoiding-infinite-recursion-with-os-walk>
-    for root, _directory_names, file_names in os.walk(source_path, followlinks=True):
+    Returns: an unsorted iterable of file names relative to the source path"""
+    seen_nodes = set()
+    for root, directory_names, file_names in os.walk(source_path, followlinks=True):
+        # Avoid symlink cycles
+        # See: <https://stackoverflow.com/questions/36977259/avoiding-infinite-recursion-with-os-walk>
+        unseen_directory_names = []
+        for directory_name in directory_names:
+            directory_stat = (Path(root) / directory_name).stat()
+            current_node = directory_stat.st_dev, directory_stat.st_ino
+            if current_node not in seen_nodes:
+                seen_nodes.add(current_node)
+                unseen_directory_names.append(directory_name)
+        directory_names[:] = unseen_directory_names
         for file_name in file_names:
-            relative_file_name = Path(os.path.join(root, file_name)).relative_to(source_path)
-            if not any([pattern.match(str(relative_file_name)) for pattern in exclude_patterns]):
-                yield relative_file_name
+            yield Path(root) / file_name
 
 
-def write_archive(archive_file_name: Path, archive_mappings: Iterable[ArchiveMapping]) -> None:
+def map_archive(
+    source_file_names: Iterable[Path],
+    source_root: Path,
+    archive_root: Path,
+    include_patterns: Optional[Iterable[Pattern]] = None,
+    exclude_patterns: Optional[Iterable[Pattern]] = None
+) -> ArchiveMapResult:
+    """Return a separated result with archive file mappings for mapped files and a list of source file paths for unmapped files
+
+    Args:
+        include_patterns: an optional sequence of regular expressions which will be used to include files
+                          (default: include all files)
+        exclude_patterns: an optional sequence of regular expressions which will be used to exclude files
+                          (default: exclude no files)
+
+    Raises: ArchiveMapMultipleRootError
+
+    Returns: a result with archive file mappings for mapped files and a list of source file paths for unmapped files"""
+    include_patterns: Iterable[Pattern] = include_patterns or []
+    exclude_patterns: Iterable[Pattern] = exclude_patterns or []
+    mappings: List[ArchiveFileMapping] = []
+    unmapped: List[Path] = []
+
+    for source_file_name in source_file_names:
+        try:
+            relative_file_name = source_file_name.relative_to(source_root)
+        except ValueError as e:
+            raise ArchiveMapMultipleRootError(f'Not all source file names are subpaths of {source_root}') from e
+        included = not any([p.match(str(relative_file_name)) for p in exclude_patterns])
+        if include_patterns:
+            included &= any([p.match(str(relative_file_name)) for p in include_patterns])
+        if included:
+            mappings.append(ArchiveFileMapping(source_file_name, archive_root / relative_file_name))
+        else:
+            unmapped.append(source_file_name)
+
+    return ArchiveMapResult(mappings, unmapped)
+
+
+def write_archive(archive_file_name: Path, archive_mappings: Iterable[ArchiveFileMapping]) -> None:
     """Write a zip file archive composed of the specified archive file mappings
 
     Args:

@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch, MagicMock
 
-from drover.io import ArchiveMapping, get_digest, get_relative_file_names, write_archive
+from drover.io import ArchiveFileMapping, get_digest, iter_file_names, write_archive, map_archive
 
 
 class TestGetDigest(TestCase):
@@ -26,7 +26,7 @@ class TestGetRelativeFileNames(TestCase):
             ('/path_b', (), ('file_b_0',)),
         )
         with patch.object(os, 'walk', return_value=expected_walk) as mock_walk:
-            names = set(get_relative_file_names(expected_source_path))
+            names = set(iter_file_names(expected_source_path))
             mock_walk.assert_called_once_with(str(expected_source_path))
             assert names == expected_relative_file_names
 
@@ -47,8 +47,8 @@ class TestWriteArchive(TestCase):
     def test_write_non_empty_archive(self):
         expected_archive_file_name = Path('archive.zip')
         expected_archive_mappings = [
-            ArchiveMapping(source_file_name=Path('source/a'), archive_file_name=Path('archive/a')),
-            ArchiveMapping(source_file_name=Path('source/b'), archive_file_name=Path('archive/b')),
+            ArchiveFileMapping(source_file_name=Path('source/a'), archive_file_name=Path('archive/a')),
+            ArchiveFileMapping(source_file_name=Path('source/b'), archive_file_name=Path('archive/b')),
         ]
         mock_zip_file = MagicMock(spec=zipfile.ZipFile)
         with patch.object(zipfile, 'ZipFile') as mock_zip_file_cls:

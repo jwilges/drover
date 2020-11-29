@@ -148,7 +148,7 @@ setuptools.setup(
     install_requires=[
         'boto3>=1.12',
         'botocore>=1.15',
-        'pydantic>=1.4',
+        'pydantic>=1.5',
         'pyyaml>=5.3',
         'tqdm>=4.44',
         'dataclasses; python_version < "3.7"'
