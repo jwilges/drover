@@ -1,0 +1,21 @@
+<!doctype html>
+
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title }}</title>
+  <style>
+    body {
+        font-size: 14px;
+        font-family: sans-serif, serif;
+    }
+  </style>
+</head>
+<body>
+  <h1>{{ title }}</h1>
+  <img src="{{ image }}"><br>
+  {% for line in text -%}
+    <p>{{ line }}</p>
+  {%- endfor %}
+</body>
+</html>

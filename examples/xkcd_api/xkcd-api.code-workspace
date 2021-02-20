@@ -1,0 +1,35 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"files.exclude": {
+			"**/.DS_Store": true,
+			"**/.git": true,
+			"**/.cache": true,
+			"**/.eggs": true,
+			"**/.nox": true,
+			"**/.pytest_cache": true,
+			"**/.mypy_cache": true,
+			"**/*.egg-info": true,
+			"**/__pycache__": true,
+			"**/*.py[cdo]": true
+		},
+		"python.venvPath": "${workspaceFolder}/.nox",
+		"python.pythonPath": "${workspaceFolder}/.nox/dev-3-8",
+		"python.workspaceSymbols.enabled": true,
+		"python.formatting.provider": "yapf",
+		"python.linting.enabled": true,
+		"python.linting.pylintEnabled": false,
+		"python.linting.mypyEnabled": true,
+		"python.linting.mypyArgs": [
+			"--config-file ${workspaceFolder}/mypy.ini",
+		],
+		"python.testing.pytestEnabled": true,
+		"python.testing.pytestArgs": [
+			"tests"
+		]
+	}
+}

@@ -1,0 +1,9 @@
+-c requirements.txt
+bandit
+yapf
+coverage
+isort
+mypy
+pylint
+pytest
+pytest-subtests

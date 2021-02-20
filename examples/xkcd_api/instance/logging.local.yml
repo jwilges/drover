@@ -1,0 +1,35 @@
+version: 1
+disable_existing_loggers: True
+formatters:
+    uvicorn:
+        (): uvicorn.logging.DefaultFormatter
+        fmt: "%(asctime)s:%(levelprefix)s %(name)s: %(message)s"
+        use_colors: None
+        datefmt: '%Y-%m-%d %H:%M:%S'
+    standard:
+        format: '%(asctime)s:%(levelname)-7s:%(name)s[%(thread)d]-7s: %(message)s'
+        datefmt: '%Y-%m-%d %H:%M:%S'
+handlers:
+    uvicorn:
+        formatter: uvicorn
+        class: logging.StreamHandler
+        stream: ext://sys.stderr
+    console:
+        formatter: standard
+        class: logging.StreamHandler
+        stream: ext://sys.stdout
+loggers:
+    xkcd_api:
+        propagate: false
+        level: DEBUG
+        handlers:
+            - uvicorn
+    fastapi:
+        propagate: false
+        level: INFO
+        handlers:
+            - console
+root:
+    level: INFO
+    handlers:
+        - console

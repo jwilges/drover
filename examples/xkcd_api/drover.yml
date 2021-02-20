@@ -1,0 +1,12 @@
+stages:
+  production:
+    region_name: us-east-1
+    function_name: xkcd-api
+    compatible_runtime: python3.8
+    function_file_patterns:
+      - '^xkcd_api.*'
+    function_extra_paths:
+      - instance
+    upload_bucket:
+      region_name: us-east-1
+      bucket_name: drover-examples
