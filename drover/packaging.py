@@ -9,11 +9,12 @@ from typing import List, Optional, Sequence
 from drover.io import (
     ArchiveDescriptor,
     ArchiveFileMapping,
+    ArchiveMapResult,
     get_digest,
     iter_file_names,
     map_archive,
 )
-from drover.models import Package, PackageFunction, PackageLayer
+from drover.models import Package, PackageFunction, PackageLayer, UnmappedFileBehavior
 
 _logger = logging.getLogger(__name__)
 
@@ -62,21 +63,30 @@ def get_package_archive_metadata(package: Package, install_path: Path) -> Packag
                 message.write(f'  {mapping.archive_file_name}: {mapping.source_file_name}\n')
             _logger.debug(message.getvalue())
 
+    def map_extra(extra_path: Path) -> Optional[ArchiveMapResult]:
+        if not extra_path or not extra_path.exists():
+            return None
+        if extra_path.is_dir():
+            return map_archive(iter_file_names(extra_path), extra_path, Path('/'))
+        elif extra_path.is_file():
+            return map_archive([extra_path], extra_path, Path('/'))
+        return None
+
     function_metadata: Optional[FunctionArchiveMetadata] = None
     layers_metadata: List[LayerArchiveMetadata] = []
 
     function = package.function
     if function:
-        extra_contents = [
-            map_archive(iter_file_names(extra_path), extra_path, Path('/'))
-            for extra_path in function.extra_paths
-        ]
+        extra_contents = filter(
+            None, (map_extra(extra_path) for extra_path in function.extra_paths)
+        )
+        function_map_all = package.unmapped_file_behavior == UnmappedFileBehavior.map_to_function
         function_content = map_archive(
             iter_file_names(install_path),
             install_path,
             Path('/'),
-            include_patterns=function.includes,
-            exclude_patterns=function.excludes,
+            include_patterns=function.includes if not function_map_all else [],
+            exclude_patterns=function.excludes if not function_map_all else [],
         )
         function_mappings = list(
             itertools.chain(
@@ -87,12 +97,20 @@ def get_package_archive_metadata(package: Package, install_path: Path) -> Packag
         function_source_file_names = [mapping.source_file_name for mapping in function_mappings]
         function_metadata = FunctionArchiveMetadata(
             function=function,
-            archive=ArchiveDescriptor(
-                function_mappings, get_digest(function_source_file_names)
-            )
+            archive=ArchiveDescriptor(function_mappings, get_digest(function_source_file_names))
         )
 
-    layer_file_names = function_content.unmapped_files if function else list(iter_file_names(install_path))
+    layer_file_names: Sequence[Path] = []
+    if function:
+        if function_content.unmapped_files:
+            if package.unmapped_file_behavior == UnmappedFileBehavior.map_to_layer:
+                layer_file_names = function_content.unmapped_files
+            elif package.unmapped_file_behavior == UnmappedFileBehavior.error:
+                raise RuntimeError(f'Package has unmapped files: {function_content.unmapped_files}')
+            elif package.unmapped_file_behavior == UnmappedFileBehavior.ignore:
+                _logger.debug('Ignoring unmapped files: %s', function_content.unmapped_files)
+    else:
+        layer_file_names = list(iter_file_names(install_path))
     package_layers: List[PackageLayer] = [
         layer for layer in package.layers if isinstance(layer, PackageLayer)
     ]
@@ -115,12 +133,18 @@ def get_package_archive_metadata(package: Package, install_path: Path) -> Packag
 
     if _logger.isEnabledFor(logging.DEBUG):
         if function_metadata:
-            _log(f'Function file mappings: {function_metadata.function.name}\n', function_metadata.archive.file_mappings)
+            _log(
+                f'Function file mappings: {function_metadata.function.name}\n',
+                function_metadata.archive.file_mappings
+            )
         for metadata in layers_metadata:
             _log(f'Layer file mappings: {metadata.layer.name}:\n', metadata.archive.file_mappings)
 
     if function_metadata:
-        _logger.info('Function digest: %s: %s', function_metadata.function.name, function_metadata.archive.digest)
+        _logger.info(
+            'Function digest: %s: %s', function_metadata.function.name,
+            function_metadata.archive.digest
+        )
     for metadata in layers_metadata:
         _logger.info('Layer digest: %s: %s', metadata.layer.name, metadata.archive.digest)
 

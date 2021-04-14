@@ -28,7 +28,7 @@ class LogLevelRangeFilter(logging.Filter):
         self.maximum_level = maximum_level
 
     def filter(self, record) -> bool:
-        """Return `True` if the record log level does not meet or exceed the maximum log level."""
+        """Return `True` if the record log level is in the range `[minimum_level, maximum_level]`."""
         return record.levelno >= self.minimum_level and record.levelno <= self.maximum_level
 
 
@@ -52,7 +52,7 @@ def _parse_arguments() -> Tuple[argparse.ArgumentParser, argparse.Namespace]:
                              help='Settings file name (default: "drover.yml")')
     root_parser.add_argument('--install-path', default=Path(), type=Path,
                              help='Package install path (e.g. from "pip install -t"; default: working directory)')
-    root_parser.add_argument('stage', type=str)
+    root_parser.add_argument('package', type=str)
 
     return root_parser, root_parser.parse_args()
 
@@ -125,7 +125,7 @@ def main():
     settings: Settings = _parse_settings(settings_file_name)
 
     try:
-        drover = Drover(settings, arguments.stage, interactive=arguments.interactive)
+        drover = Drover(settings, arguments.package, interactive=arguments.interactive)
         drover.update(install_path)
     except SettingsError as e:
         _logger.error('Initialization failed: %s', e)

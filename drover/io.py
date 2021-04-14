@@ -14,14 +14,17 @@ from typing import Iterable, List, Optional, Pattern, Sequence
 @dataclass
 class ArchiveFileMapping:
     """A mapping between an archive file name and its corresponding source filesystem path"""
-    source_file_name: Path
     archive_file_name: Path
+    source_file_name: Path
 
 
 @dataclass
 class ArchiveMapResult:
     mappings: Sequence[ArchiveFileMapping] = field(default_factory=list)
     unmapped_files: Sequence[Path] = field(default_factory=list)
+
+    def __bool__(self):
+        return bool(self.mappings)
 
 
 @dataclass
@@ -148,12 +151,19 @@ def map_archive(
         try:
             relative_file_name = source_file_name.relative_to(source_root)
         except ValueError as e:
-            raise ArchiveMapMultipleRootError(f'Not all source file names are subpaths of {source_root}') from e
+            raise ArchiveMapMultipleRootError(
+                f'Not all source file names are subpaths of {source_root}'
+            ) from e
         included = not any([p.match(str(relative_file_name)) for p in exclude_patterns])
         if include_patterns:
             included &= any([p.match(str(relative_file_name)) for p in include_patterns])
         if included:
-            mappings.append(ArchiveFileMapping(source_file_name, archive_root / relative_file_name))
+            mappings.append(
+                ArchiveFileMapping(
+                    archive_file_name=archive_root / relative_file_name,
+                    source_file_name=source_file_name
+                )
+            )
         else:
             unmapped.append(source_file_name)
 
@@ -166,6 +176,8 @@ def write_archive(archive_file_name: Path, archive_mappings: Iterable[ArchiveFil
     Args:
         archive_file_name: a writable file
         archive_mappings: an iterable of mappings of filesystem file names to archive file names"""
-    with zipfile.ZipFile(archive_file_name, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+    with zipfile.ZipFile(
+        archive_file_name, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9
+    ) as archive:
         for mapping in archive_mappings:
             archive.write(filename=mapping.source_file_name, arcname=mapping.archive_file_name)
